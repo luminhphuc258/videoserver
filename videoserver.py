@@ -22,7 +22,13 @@ def video_feed():
             if latest_frame is not None:
                 _, jpeg = cv2.imencode('.jpg', latest_frame)
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+                       b'Content-Type: image/jpeg\r\n\r\n' +
+                       jpeg.tobytes() + b'\r\n')
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-app.run(host="0.0.0.0", port=8000)
+@app.route("/")
+def index():
+    return "<h3>ESP32 Video Stream Server running ✅</h3>"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000)
