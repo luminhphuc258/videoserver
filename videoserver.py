@@ -245,8 +245,8 @@ INDEX_HTML = """
   window.send = send;
 
   // ====== CAMERA BUFFERED PLAYBACK ======
-  const TARGET_BUFFER = 3;   // gom 12 khung (đổi 10–20 tuỳ ý)
-  const PLAY_INTERVAL = 70;   // ms giữa 2 frame khi phát (60–120 tuỳ ý)
+  let TARGET_BUFFER = 3;   // gom 12 khung (đổi 10–20 tuỳ ý)
+  let PLAY_INTERVAL = 70;   // ms giữa 2 frame khi phát (60–120 tuỳ ý)
   let buf = [];               // list blob URLs
   let playing = false;
   let stopFlag = false;
