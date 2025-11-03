@@ -212,99 +212,107 @@ INDEX_HTML = """
 </div>
 
 <script>
-// ====== SENSOR POLLING ======
-async function poll(){
-  try{
-    const r = await fetch('/status', {cache:'no-store'});
-    const s = await r.json();
-    const se = s.sensor || {};
-    const ai = s.ai || {};
-    document.getElementById('dist').textContent = (se.distance_cm>=0)?se.distance_cm.toFixed(1):'timeout';
-    document.getElementById('obs').textContent  = se.obstacle ? 'YES' : 'NO';
-    document.getElementById('led').textContent  = se.led ? 'ON' : 'OFF';
-    document.getElementById('ai_obs').textContent  = ai.obstacle ? 'YES' : 'NO';
-    document.getElementById('ai_label').textContent= ai.label || '--';
-  }catch(e){}
-  setTimeout(poll, 300);
-}
-poll();
-
-// ====== CONTROL ======
-async function send(dir){
-  const el = document.getElementById('msg');
-  try{
-    const r = await fetch('/move?dir=' + encodeURIComponent(dir), {method:'POST'});
-    const j = await r.json();
-    el.textContent = j.ok ? ('Đã gửi lệnh: ' + dir) : ('Lỗi: ' + (j.error||'unknown'));
-  }catch(e){ el.textContent = 'Lỗi mạng khi gửi lệnh'; }
-}
-
-// ====== CAMERA BUFFERED PLAYBACK ======
-// Lấy ảnh từng khung ở /snapshot, gom 1 lô rồi phát liền:
-const TARGET_BUFFER = 12;   // đổi 10–20 tuỳ ý
-const PLAY_INTERVAL = 90;   // ms giữa 2 frame khi phát
-let buf = [];               // mảng blob URL
-let playing = false;
-let stopFlag = false;
-const camImg = document.getElementById('cam');
-const camState = document.getElementById('camState');
-
-function revokeAll(){
-  for(const u of buf){ URL.revokeObjectURL(u); }
-  buf = [];
-}
-
-async function fetchOne(){
-  const res = await fetch('/snapshot?ts=' + Date.now(), {cache:'no-store'});
-  if(!res.ok) throw new Error('no frame');
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  buf.push(url);
-}
-
-async function fillBuffer(){
-  camState.textContent = 'Loading…';
-  while(!stopFlag && buf.length < TARGET_BUFFER){
-    try{ await fetchOne(); }
-    catch(e){ await new Promise(r=>setTimeout(r,120)); }
+(() => {
+  // ====== SENSOR POLLING ======
+  async function poll(){
+    try{
+      const r = await fetch('/status', {cache:'no-store'});
+      const s = await r.json();
+      const se = s.sensor || {};
+      const ai = s.ai || {};
+      document.getElementById('dist').textContent = (se.distance_cm>=0) ? se.distance_cm.toFixed(1) : 'timeout';
+      document.getElementById('obs').textContent  = se.obstacle ? 'YES' : 'NO';
+      document.getElementById('led').textContent  = se.led ? 'ON' : 'OFF';
+      document.getElementById('ai_obs').textContent  = ai.obstacle ? 'YES' : 'NO';
+      document.getElementById('ai_label').textContent= ai.label || '--';
+    }catch(e){
+      // silent
+    }
+    setTimeout(poll, 300);
   }
-}
+  poll();
 
-async function playBuffer(){
-  playing = true;
-  camState.textContent = 'Playing';
-  while(!stopFlag && buf.length){
-    const url = buf.shift();
-    camImg.src = url;
-    // giải phóng URL cũ sau khi vẽ frame tiếp theo
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
-    await new Promise(r=>setTimeout(r, PLAY_INTERVAL));
+  // ====== CONTROL ======
+  async function send(dir){
+    const el = document.getElementById('msg');
+    try{
+      const r = await fetch('/move?dir=' + encodeURIComponent(dir), {method:'POST'});
+      const j = await r.json();
+      el.textContent = j.ok ? ('Đã gửi lệnh: ' + dir) : ('Lỗi: ' + (j.error||'unknown'));
+    }catch(e){ el.textContent = 'Lỗi mạng khi gửi lệnh'; }
   }
-  playing = false;
-}
+  // export cho nút bấm
+  window.send = send;
 
-async function loopCam(){
-  stopFlag = false;
-  revokeAll();
-  while(!stopFlag){
-    await fillBuffer();     // gom một lô
-    if(stopFlag) break;
-    await playBuffer();     # phát mượt
+  // ====== CAMERA BUFFERED PLAYBACK ======
+  const TARGET_BUFFER = 12;   // gom 12 khung (đổi 10–20 tuỳ ý)
+  const PLAY_INTERVAL = 90;   // ms giữa 2 frame khi phát (60–120 tuỳ ý)
+  let buf = [];               // list blob URLs
+  let playing = false;
+  let stopFlag = false;
+
+  const camImg   = document.getElementById('cam');
+  const camState = document.getElementById('camState');
+
+  function revokeAll(){
+    for(const u of buf){ URL.revokeObjectURL(u); }
+    buf = [];
   }
-  camState.textContent = 'Stopped';
-}
 
-function reloadCam(){
-  stopFlag = true;
-  revokeAll();
-  camImg.removeAttribute('src');
-  camState.textContent = 'Loading…';
-  setTimeout(loopCam, 50);
-}
+  async function fetchOne(){
+    const res = await fetch('/snapshot?ts=' + Date.now(), {cache:'no-store'});
+    if(!res.ok) throw new Error('no frame');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    buf.push(url);
+  }
 
-// tự chạy khi mở trang
-reloadCam();
+  async function fillBuffer(){
+    camState.textContent = 'Loading…';
+    while(!stopFlag && buf.length < TARGET_BUFFER){
+      try { await fetchOne(); }
+      catch(e){ await new Promise(r => setTimeout(r, 120)); }
+    }
+  }
+
+  async function playBuffer(){
+    playing = true;
+    camState.textContent = 'Playing';
+    while(!stopFlag && buf.length){
+      const url = buf.shift();
+      camImg.src = url;
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await new Promise(r => setTimeout(r, PLAY_INTERVAL));
+    }
+    playing = false;
+  }
+
+  async function loopCam(){
+    stopFlag = false;
+    revokeAll();
+    while(!stopFlag){
+      await fillBuffer();
+      if(stopFlag) break;
+      await playBuffer();     /* phát mượt */
+    }
+    camState.textContent = 'Stopped';
+  }
+
+  function reloadCam(){
+    stopFlag = true;
+    revokeAll();
+    camImg.removeAttribute('src');
+    camState.textContent = 'Loading…';
+    setTimeout(loopCam, 50);
+  }
+  // export cho nút Reload
+  window.reloadCam = reloadCam;
+
+  // tự khởi động vòng gom/phát khi mở trang
+  reloadCam();
+})();
 </script>
+
 </body></html>
 """
 
