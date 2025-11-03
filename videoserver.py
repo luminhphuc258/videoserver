@@ -245,8 +245,8 @@ INDEX_HTML = """
   window.send = send;
 
   // ====== CAMERA BUFFERED PLAYBACK ======
-  const TARGET_BUFFER = 12;   // gom 12 khung (đổi 10–20 tuỳ ý)
-  const PLAY_INTERVAL = 90;   // ms giữa 2 frame khi phát (60–120 tuỳ ý)
+  const TARGET_BUFFER = 3;   // gom 12 khung (đổi 10–20 tuỳ ý)
+  const PLAY_INTERVAL = 70;   // ms giữa 2 frame khi phát (60–120 tuỳ ý)
   let buf = [];               // list blob URLs
   let playing = false;
   let stopFlag = false;
@@ -268,12 +268,21 @@ INDEX_HTML = """
   }
 
   async function fillBuffer(){
-    camState.textContent = 'Loading…';
-    while(!stopFlag && buf.length < TARGET_BUFFER){
-      try { await fetchOne(); }
-      catch(e){ await new Promise(r => setTimeout(r, 120)); }
+  camState.textContent = 'Loading…';
+  let miss = 0;
+  while(!stopFlag && buf.length < TARGET_BUFFER){
+    try {
+      await fetchOne();
+      miss = 0;
+    } catch(e){
+      miss++;
+      if (miss >= 3 && TARGET_BUFFER < 6) TARGET_BUFFER++;  // mạng kém → tăng buffer
+      await new Promise(r => setTimeout(r, 120));
     }
   }
+  // mạng ổn định → hạ buffer để giảm trễ
+  if (miss === 0 && TARGET_BUFFER > 2) TARGET_BUFFER--;
+}
 
   async function playBuffer(){
     playing = true;
