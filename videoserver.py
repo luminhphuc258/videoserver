@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, make_response
 import cv2
 import numpy as np
 import time
@@ -6,6 +6,7 @@ from threading import Lock
 
 app = Flask(__name__)
 
+# ---- Shared states ----
 latest_frame = None
 latest_sensor = {"distance_cm": -1.0, "obstacle": False, "led": False, "ts": 0}
 latest_ai = {"label": "", "obstacle": False, "ts": 0}
@@ -14,7 +15,8 @@ frame_lock = Lock()
 sensor_lock = Lock()
 ai_lock = Lock()
 
-# ---------- Nhận ảnh từ ESP32 ----------
+
+# ---------- Upload JPEG frame từ ESP32-CAM ----------
 @app.route("/upload_frame", methods=["POST"])
 def upload_frame():
     global latest_frame
@@ -27,26 +29,26 @@ def upload_frame():
         latest_frame = frame
     return "OK", 200
 
-# ---------- Nhận sensor từ ESP32 ----------
+
+# ---------- Upload sensor JSON từ ESP32-S3 ----------
 @app.route("/sensor", methods=["POST"])
 def sensor():
     global latest_sensor
     js = request.get_json(silent=True) or {}
-    d  = float(js.get("distance_cm", -1))
+    d = float(js.get("distance_cm", -1))
     ob = bool(js.get("obstacle", False))
     le = bool(js.get("led", False))
     with sensor_lock:
         latest_sensor = {"distance_cm": d, "obstacle": ob, "led": le, "ts": time.time()}
     return "OK", 200
 
-# ---------- Demo nhận dạng & vẽ khung ----------
+
+# ---------- (Demo) Nhận dạng & vẽ khung ----------
 def detect_and_draw(frame):
     """
-    Thay bằng model thật (YOLO/…):
-      - chạy detector → danh sách bbox (x,y,w,h,label,score)
-      - vẽ rectangle + label
-      - cập nhật latest_ai
-    Ở đây: demo contour lớn coi như 'obstacle'.
+    Thay bằng model thật nếu cần:
+      - trả về ảnh 'out' đã vẽ bbox + cập nhật latest_ai.
+    Ở đây demo coi contour lớn là obstacle.
     """
     out = frame.copy()
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -56,15 +58,14 @@ def detect_and_draw(frame):
     found = False
     label = ""
     for c in cnts:
-        x,y,w,h = cv2.boundingRect(c)
-        if w*h < 8000:    # bỏ nhỏ quá (tùy chỉnh)
+        x, y, w, h = cv2.boundingRect(c)
+        if w * h < 8000:  # filter nhiễu nhỏ
             continue
         found = True
         label = "obstacle"
-        cv2.rectangle(out, (x,y), (x+w, y+h), (0,255,0), 2)
-        cv2.putText(out, label, (x, max(0, y-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-        # vẽ 1-2 cái là đủ minh họa
-        break
+        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(out, label, (x, max(0, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        break  # vẽ 1 cái là đủ minh hoạ
 
     with ai_lock:
         latest_ai["label"] = label if found else ""
@@ -73,21 +74,38 @@ def detect_and_draw(frame):
 
     return out
 
-# ---------- Stream video sau khi đã vẽ bbox ----------
+
+# ---------- Stream MJPEG ảnh đã vẽ ----------
 @app.route("/video")
 def video_feed():
     def gen():
-        while True:
-            with frame_lock:
-                f = None if latest_frame is None else latest_frame.copy()
-            if f is not None:
-                drawn = detect_and_draw(f)
-                ok, jpeg = cv2.imencode(".jpg", drawn, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-                if ok:
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' +
-                           jpeg.tobytes() + b'\r\n')
-            time.sleep(0.03)  # ~30fps upper bound (thực tế phụ thuộc upload)
-    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+        try:
+            while True:
+                with frame_lock:
+                    f = None if latest_frame is None else latest_frame.copy()
+                if f is not None:
+                    drawn = detect_and_draw(f)
+                    ok, jpeg = cv2.imencode(".jpg", drawn, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                    if ok:
+                        data = jpeg.tobytes()
+                        # Gửi kèm Content-Length giúp proxy ổn định hơn
+                        yield (b"--frame\r\n"
+                               b"Content-Type: image/jpeg\r\n"
+                               b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n" +
+                               data + b"\r\n")
+                time.sleep(0.05)  # ~20fps upper bound (thực tế tuỳ tốc độ upload)
+        except GeneratorExit:
+            app.logger.info("Client disconnected from /video")
+        except Exception as e:
+            app.logger.exception("Stream error: %s", e)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Connection": "keep-alive",
+    }
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame", headers=headers)
+
 
 # ---------- Status tổng hợp ----------
 @app.route("/status")
@@ -96,12 +114,19 @@ def status():
         s = dict(latest_sensor)
     with ai_lock:
         a = dict(latest_ai)
-    return jsonify({
-        "sensor": s,
-        "ai": a
-    })
+    resp = jsonify({"sensor": s, "ai": a})
+    # Nếu cần CORS:
+    # resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
-# ---------- UI trang web ----------
+
+# ---------- Healthcheck ----------
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
+
+# ---------- UI ----------
 INDEX_HTML = """
 <!doctype html>
 <html lang="vi"><head>
@@ -136,7 +161,7 @@ INDEX_HTML = """
 <script>
 async function poll(){
   try{
-    const r = await fetch('/status');
+    const r = await fetch('/status', {cache:'no-store'});
     const s = await r.json();
     const se = s.sensor || {};
     const ai = s.ai || {};
@@ -155,7 +180,12 @@ poll();
 
 @app.route("/")
 def index():
-    return INDEX_HTML
+    # Nếu muốn CORS cho toàn trang:
+    resp = make_response(INDEX_HTML)
+    # resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
 
 if __name__ == "__main__":
+    # Dev mode (single process). Production: dùng gunicorn -k gthread, xem bên dưới.
     app.run(host="0.0.0.0", port=8000, threaded=True)
