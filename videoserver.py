@@ -161,7 +161,7 @@ INDEX_HTML = """
   .row{display:flex;justify-content:center;align-items:center}
   /* Top: camera 180x180 + nút reload */
   .camRow{display:flex;justify-content:center;align-items:center;gap:10px}
-  .cam{width:280px;height:280px;border-radius:10px;border:1px solid var(--border);background:#000;object-fit:cover}
+  .cam{width:350px;height:280px;border-radius:10px;border:1px solid var(--border);background:#000;object-fit:contain}
   .btn{background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:8px 12px;cursor:pointer;color:#eee}
   .btn:active{transform:scale(0.98)}
   .muted{color:var(--muted);font-size:12px;margin-top:6px;text-align:center}
