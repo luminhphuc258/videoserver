@@ -153,24 +153,49 @@ INDEX_HTML = """
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Matthew Robot Control Board</title>
 <style>
-  :root { --bg:#111; --card:#0d0d0d; --border:#222; --txt:#eee; --muted:#aaa; }
+  :root {
+    --bg:#111; --card:#0d0d0d; --border:#222; --txt:#eee; --muted:#aaa;
+    --btnW: 100px; --btnH: 60px;
+  }
   *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);margin:0;padding:16px;}
+  body{
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    background:var(--bg);color:var(--txt);margin:0;padding:16px;
+  }
   .wrap{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
   .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px}
   .row{display:flex;justify-content:center;align-items:center}
-  /* Top: camera 180x180 + nút reload */
-  .camRow{display:flex;justify-content:center;align-items:center;gap:10px}
+  /* Top: camera 350x280 + nút reload */
+  .camRow{display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap}
   .cam{width:350px;height:280px;border-radius:10px;border:1px solid var(--border);background:#000;object-fit:contain}
-  .btn{background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:8px 12px;cursor:pointer;color:#eee}
+  .btn{
+    background:#1c1c1c;border:1px solid #333;border-radius:12px;
+    padding:10px 14px;cursor:pointer;color:#eee;font-weight:600;
+    transition:transform .05s ease;
+  }
   .btn:active{transform:scale(0.98)}
+  .btn:hover{border-color:#3d3d3d}
   .muted{color:var(--muted);font-size:12px;margin-top:6px;text-align:center}
   /* Middle: sensor badges */
   .stats{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
   .badge{border:1px solid #2c2c2c;background:#1c1c1c;border-radius:999px;padding:8px 12px}
   .big{font-size:20px;font-weight:700}
-  /* Bottom: control pad */
-  .pad{display:grid;grid-template-columns:80px 80px 80px;grid-template-rows:60px 60px 60px;gap:8px;justify-content:center}
+  /* Bottom: control pad (FLEX) */
+  .padFlex{display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center}
+  .padRow{display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap}
+  .btn.ctrl{
+    width:var(--btnW); height:var(--btnH);
+    display:flex; align-items:center; justify-content:center;
+    padding:0; user-select:none;
+  }
+  .btn.stop{
+    background:#2a1c1c; border-color:#533; 
+  }
+  .btn.stop:hover{border-color:#755}
+  @media (max-width:420px){
+    :root{ --btnW: 88px; --btnH: 56px; }
+    .cam{width:300px;height:220px}
+  }
 </style></head><body>
 <div class="wrap">
 
@@ -200,11 +225,18 @@ INDEX_HTML = """
   <!-- ROW 3: CONTROL -->
   <div class="card">
     <h3>Điều khiển</h3>
-    <div class="pad">
-      <button class="btn" style="grid-column:2/3" onclick="send('up')">Lên</button>
-      <button class="btn" onclick="send('left')">Trái</button>
-      <button class="btn" onclick="send('down')">Xuống</button>
-      <button class="btn" onclick="send('right')">Phải</button>
+    <div class="padFlex">
+      <div class="padRow">
+        <button class="btn ctrl" id="btn-up"    onclick="sendRobot('up')">⬆️ Lên</button>
+      </div>
+      <div class="padRow">
+        <button class="btn ctrl" id="btn-left"  onclick="sendRobot('left')">⬅️ Trái</button>
+        <button class="btn ctrl stop" id="btn-stop"  onclick="sendRobot('stop')">⏹️ Dừng</button>
+        <button class="btn ctrl" id="btn-right" onclick="sendRobot('right')">➡️ Phải</button>
+      </div>
+      <div class="padRow">
+        <button class="btn ctrl" id="btn-down"  onclick="sendRobot('down')">⬇️ Xuống</button>
+      </div>
     </div>
     <div id="msg" class="muted"></div>
   </div>
@@ -213,6 +245,10 @@ INDEX_HTML = """
 
 <script>
 (() => {
+  // ====== CONFIG: Python action server ======
+  const PYTHON_SERVER = "https://mylocalpythonserver-mypythonserver.up.railway.app";
+  const CMD_MAP = { up: "tien", down: "lui", left: "trai", right: "phai", stop: "yen" };
+
   // ====== SENSOR POLLING ======
   async function poll(){
     try{
@@ -232,22 +268,38 @@ INDEX_HTML = """
   }
   poll();
 
-  // ====== CONTROL ======
-  async function send(dir){
+  // ====== CONTROL (call Python server endpoints) ======
+  async function sendRobot(dir){
     const el = document.getElementById('msg');
+    const endpoint = CMD_MAP[dir];
+    if(!endpoint){
+      el.textContent = "Lỗi: lệnh không hợp lệ";
+      return;
+    }
     try{
-      const r = await fetch('/move?dir=' + encodeURIComponent(dir), {method:'POST'});
-      const j = await r.json();
-      el.textContent = j.ok ? ('Đã gửi lệnh: ' + dir) : ('Lỗi: ' + (j.error||'unknown'));
-    }catch(e){ el.textContent = 'Lỗi mạng khi gửi lệnh'; }
+      const r = await fetch(PYTHON_SERVER + "/" + endpoint, {
+        method: "POST",
+        mode: "cors",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ source: "video_ui", ts: Date.now() })
+      });
+      if(!r.ok){
+        const txt = await r.text().catch(()=> "");
+        el.textContent = "Lỗi gửi lệnh (" + r.status + "): " + (txt || "unknown");
+        return;
+      }
+      el.textContent = "✅ Đã gửi: " + dir.toUpperCase() + " → /" + endpoint;
+    }catch(e){
+      el.textContent = "Lỗi mạng khi gửi lệnh: " + (e && e.message ? e.message : e);
+    }
   }
-  // export cho nút bấm
-  window.send = send;
+  // export
+  window.sendRobot = sendRobot;
 
   // ====== CAMERA BUFFERED PLAYBACK ======
-  let TARGET_BUFFER = 3;   // gom 12 khung (đổi 10–20 tuỳ ý)
-  let PLAY_INTERVAL = 70;   // ms giữa 2 frame khi phát (60–120 tuỳ ý)
-  let buf = [];               // list blob URLs
+  let TARGET_BUFFER = 3;    // có thể auto điều chỉnh
+  let PLAY_INTERVAL = 70;   // ms/frame
+  let buf = [];             // list blob URLs
   let playing = false;
   let stopFlag = false;
 
@@ -268,21 +320,21 @@ INDEX_HTML = """
   }
 
   async function fillBuffer(){
-  camState.textContent = 'Loading…';
-  let miss = 0;
-  while(!stopFlag && buf.length < TARGET_BUFFER){
-    try {
-      await fetchOne();
-      miss = 0;
-    } catch(e){
-      miss++;
-      if (miss >= 3 && TARGET_BUFFER < 6) TARGET_BUFFER++;  // mạng kém → tăng buffer
-      await new Promise(r => setTimeout(r, 120));
+    camState.textContent = 'Loading…';
+    let miss = 0;
+    while(!stopFlag && buf.length < TARGET_BUFFER){
+      try {
+        await fetchOne();
+        miss = 0;
+      } catch(e){
+        miss++;
+        if (miss >= 3 && TARGET_BUFFER < 6) TARGET_BUFFER++;
+        await new Promise(r => setTimeout(r, 120));
+      }
     }
+    // mạng ổn định → hạ buffer để giảm trễ
+    if (miss === 0 && TARGET_BUFFER > 2) TARGET_BUFFER--;
   }
-  // mạng ổn định → hạ buffer để giảm trễ
-  if (miss === 0 && TARGET_BUFFER > 2) TARGET_BUFFER--;
-}
 
   async function playBuffer(){
     playing = true;
@@ -302,7 +354,7 @@ INDEX_HTML = """
     while(!stopFlag){
       await fillBuffer();
       if(stopFlag) break;
-      await playBuffer();     /* phát mượt */
+      await playBuffer();
     }
     camState.textContent = 'Stopped';
   }
@@ -325,6 +377,8 @@ INDEX_HTML = """
 </body></html>
 """
 
+
+#==================end html==========
 @app.route("/")
 def index():
     return make_response(INDEX_HTML)
