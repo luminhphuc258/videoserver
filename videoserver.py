@@ -55,6 +55,31 @@ def on_message(cli, userdata, msg):
     if msg.topic.startswith("robot/camera/"):
         handle_camera_part(msg.topic, msg.payload)
 
+# ---------- Detect & Draw ----------
+def detect_and_draw(frame):
+    """Phát hiện vật thể cơ bản bằng contour & vẽ khung."""
+    # Chuyển BGR → RGB để không bị tông xanh
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # Làm mờ nhẹ để giảm nhiễu
+    blur = cv2.GaussianBlur(rgb, (5, 5), 0)
+
+    # Chuyển sang ảnh xám rồi phát hiện biên
+    gray = cv2.cvtColor(blur, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 60, 140)
+
+    # Tìm các đường viền (contours)
+    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w * h < 8000:   # bỏ qua vật thể nhỏ
+            continue
+        cv2.rectangle(rgb, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(rgb, "object", (x, y - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        break  # chỉ vẽ vật thể đầu tiên đủ lớn
+    return rgb
+
 
 def mqtt_thread():
     """Luồng MQTT subscriber chạy nền."""
@@ -79,7 +104,12 @@ def detected():
         f = None if latest_frame is None else latest_frame.copy()
     if f is None:
         return Response(status=404)
-    ok, jpeg = cv2.imencode(".jpg", f, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+
+    # Áp dụng xử lý nhận dạng
+    result = detect_and_draw(f)
+
+    # Mã hóa JPEG và gửi trả
+    ok, jpeg = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
     if not ok:
         return Response(status=500)
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
