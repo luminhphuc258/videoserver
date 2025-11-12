@@ -128,23 +128,27 @@ def index():
         </div>
       </div>
 
-      <p id="status"></p>
+      <p id="status">Loading sensor data...</p>
 
       <script>
-        async function updateStatus(){{
-          const r = await fetch('/status');
-          const d = await r.json();
-          document.getElementById('status').innerText =
-            `📏 Distance: ${'{:.1f}'.format(latest_sensor['distance_cm']) if 'distance_cm' in latest_sensor else 'N/A'} cm | Obstacle: ${'{latest_sensor['obstacle'] if 'obstacle' in latest_sensor else 'N/A'}`}
+        async function updateStatus() {{
+          try {{
+            const res = await fetch('/status');
+            const data = await res.json();
+            document.getElementById('status').innerText =
+              `📏 Distance: ${data.distance_cm?.toFixed(1) || 'N/A'} cm | Obstacle: ${data.obstacle ? 'YES' : 'NO'}`;
+          }} catch(e) {{
+            console.log(e);
+          }}
         }}
 
-        function refreshDetected(){{
+        function refreshDetected() {{
           const img = document.getElementById('det');
           img.src = '/detected?t=' + new Date().getTime();
         }}
 
         setInterval(updateStatus, 1000);
-        setInterval(refreshDetected, 500);  // cập nhật khung nhận dạng 2 FPS
+        setInterval(refreshDetected, 500);
       </script>
     </body>
     </html>
