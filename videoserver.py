@@ -1,5 +1,5 @@
 from flask import Flask, Response, render_template_string
-import cv2, time, ssl, json, threading, base64, numpy as np
+import cv2, ssl, threading, base64, numpy as np, requests
 from threading import Lock
 from paho.mqtt import client as mqtt
 
@@ -23,7 +23,7 @@ frame_lock = Lock()
 camera_buffer = {}
 
 # ===== Địa chỉ livestream HTTP của ESP32 =====
-ESP32_STREAM_URL = "http://192.168.100.134:81/stream"  # ⚠️ thay IP thật của ESP32
+ESP32_STREAM_URL = "http://192.168.100.134:81/stream"  # ⚠️ thay IP thật nếu cần
 
 # ---------- Ghép và decode ảnh từ MQTT ----------
 def handle_camera_part(topic, payload):
@@ -73,12 +73,9 @@ threading.Thread(target=mqtt_thread, daemon=True).start()
 def detect_and_draw(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     small = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
-
     faces = face_cascade.detectMultiScale(
         small, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60)
     )
-
-    # Vẽ khung xanh quanh khuôn mặt
     for (x, y, w, h) in faces:
         x, y, w, h = int(x * 2), int(y * 2), int(w * 2), int(h * 2)
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
@@ -86,17 +83,48 @@ def detect_and_draw(frame):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
     return frame
 
+# ---------- Proxy MJPEG trực tiếp cho Safari/iPad ----------
+@app.route("/stream")
+def stream_direct_proxy():
+    """Proxy nguyên bản MJPEG từ ESP32-CAM — tương thích Safari/iPad 100%"""
+    def generate():
+        try:
+            with requests.get(ESP32_STREAM_URL, stream=True, timeout=5) as r:
+                for chunk in r.iter_content(chunk_size=1024):
+                    if chunk:
+                        yield chunk
+        except requests.exceptions.RequestException as e:
+            print("❌ Stream proxy error:", e)
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n\r\n"
+                   + open_blank_frame() + b"\r\n")
+
+    return Response(
+        generate(),
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Connection": "close",
+            "Access-Control-Allow-Origin": "*",
+        },
+        content_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+def open_blank_frame():
+    """Trả về khung trắng khi không có camera"""
+    img = 255 * np.ones((240, 320, 3), np.uint8)
+    cv2.putText(img, "Camera offline", (60, 130),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+    ok, jpeg = cv2.imencode(".jpg", img)
+    return jpeg.tobytes()
+
 # ---------- API trả ảnh nhận dạng ----------
 @app.route("/detected")
 def detected():
     with frame_lock:
         f = None if latest_frame is None else latest_frame.copy()
     if f is None:
-        img = 255 * np.ones((240, 320, 3), np.uint8)
-        cv2.putText(img, "Loading...", (90, 130),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
-        ok, jpeg = cv2.imencode(".jpg", img)
-        return Response(jpeg.tobytes(), mimetype="image/jpeg")
+        return Response(open_blank_frame(), mimetype="image/jpeg")
 
     result = detect_and_draw(f)
     ok, jpeg = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
@@ -109,15 +137,16 @@ def index():
     <html>
     <head>
       <title>Matthew Robot — Face + Voice</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <style>
         body {{
           background:#111; color:#eee; text-align:center; font-family:sans-serif;
         }}
         h2 {{ color:#0ff; }}
         .grid {{
-          display:flex; justify-content:center; gap:50px; flex-wrap:wrap; margin-top:30px;
+          display:flex; justify-content:center; gap:40px; flex-wrap:wrap; margin-top:30px;
         }}
-        iframe, img {{
+        img {{
           border-radius:10px; border:2px solid #333; box-shadow:0 0 8px #000;
         }}
         button {{
@@ -133,7 +162,8 @@ def index():
       <div class="grid">
         <div>
           <h3>🎥 Live from ESP32-CAM</h3>
-          <iframe src="{ESP32_STREAM_URL}" width="320" height="240" style="border:none;"></iframe>
+          <img id="espStream" src="/stream" width="320" height="240" alt="ESP32 Stream not available">
+          <p><button onclick="reloadCam()">🔄 Reload Camera</button></p>
         </div>
         <div>
           <h3>🧠 Detected Faces (from MQTT)</h3>
@@ -150,6 +180,12 @@ def index():
       </div>
 
       <script>
+        function reloadCam() {{
+          const cam = document.getElementById('espStream');
+          cam.src = '/stream?t=' + new Date().getTime();
+        }}
+        setInterval(reloadCam, 30000);
+
         let mediaRecorder;
         let audioChunks = [];
 
