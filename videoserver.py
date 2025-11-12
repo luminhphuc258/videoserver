@@ -1,4 +1,4 @@
-from flask import Flask, Response, jsonify, render_template_string
+from flask import Flask, Response, render_template_string
 import cv2, time, ssl, json, threading, base64, numpy as np
 from threading import Lock
 from paho.mqtt import client as mqtt
@@ -11,28 +11,28 @@ MQTT_PORT = 8883
 MQTT_USER = "robot_matthew"
 MQTT_PASS = "29061992abCD!yesokmen"
 CAMERA_TOPIC = "robot/camera/#"
-SENSOR_TOPIC = "robot/sensor/#"
 
 mqtt_cli = None
-latest_sensor = {"distance_cm": -1.0, "obstacle": False, "led": False, "ts": 0}
 latest_frame = None
 frame_lock = Lock()
-camera_buffer = {}  # tạm ghép chuỗi Base64 nhiều phần
+camera_buffer = {}
 
-# ESP32-CAM livestream URL (thay IP theo Serial ESP32 của bạn)
-ESP32_STREAM_URL = "http://192.168.100.134:81/stream"
+# ===== ESP32 HTTP livestream URL =====
+ESP32_STREAM_URL = "http://192.168.100.134:81/stream"  # ⚠️ đổi IP này theo ESP32 của bạn
 
-# ---------- MQTT callbacks ----------
+# ---------- MQTT handlers ----------
 def handle_camera_part(topic, payload):
+    """Ghép chuỗi Base64 và decode thành ảnh OpenCV."""
     global latest_frame
     try:
         part_key = topic.split("/")[-1]
         frame_id = "main"
+
         if frame_id not in camera_buffer:
             camera_buffer[frame_id] = b""
-
         camera_buffer[frame_id] += payload
-        # Nếu chuỗi dài > 60KB hoặc tới part9 thì decode
+
+        # Khi đủ dữ liệu hoặc tới part cuối → decode ảnh
         if len(camera_buffer[frame_id]) > 60000 or part_key.endswith("part9"):
             b64 = camera_buffer[frame_id].decode()
             del camera_buffer[frame_id]
@@ -43,28 +43,21 @@ def handle_camera_part(topic, payload):
                 with frame_lock:
                     latest_frame = frame
     except Exception as e:
-        print("❌ handle_camera_part:", e)
+        print("❌ handle_camera_part error:", e)
 
-def handle_sensor(payload):
-    global latest_sensor
-    try:
-        js = json.loads(payload.decode())
-        latest_sensor = js
-    except Exception as e:
-        print("Sensor parse error:", e)
 
 def on_connect(cli, userdata, flags, rc, props=None):
     print(f"✅ MQTT connected rc={rc}")
     cli.subscribe(CAMERA_TOPIC, qos=0)
-    cli.subscribe(SENSOR_TOPIC, qos=1)
+
 
 def on_message(cli, userdata, msg):
     if msg.topic.startswith("robot/camera/"):
         handle_camera_part(msg.topic, msg.payload)
-    elif msg.topic.startswith("robot/sensor/"):
-        handle_sensor(msg.payload)
+
 
 def mqtt_thread():
+    """Luồng MQTT subscriber chạy nền."""
     global mqtt_cli
     mqtt_cli = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="flask_mqtt_video")
     mqtt_cli.username_pw_set(MQTT_USER, MQTT_PASS)
@@ -74,7 +67,10 @@ def mqtt_thread():
     mqtt_cli.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
     mqtt_cli.loop_forever()
 
+
+# Chạy MQTT trong luồng riêng
 threading.Thread(target=mqtt_thread, daemon=True).start()
+
 
 # ---------- Endpoint trả ảnh nhận dạng ----------
 @app.route("/detected")
@@ -88,27 +84,28 @@ def detected():
         return Response(status=500)
     return Response(jpeg.tobytes(), mimetype='image/jpeg')
 
-# ---------- UI ----------
+
+# ---------- Giao diện web ----------
 @app.route("/")
 def index():
-    html = f"""
+    html = '''
     <html>
     <head>
       <title>Matthew Robot Dashboard</title>
       <style>
-        body {{
+        body {
           background:#111;color:#eee;text-align:center;
           font-family:sans-serif;margin-top:30px;
-        }}
-        .box {{
+        }
+        .box {
           display:flex;justify-content:center;gap:50px;
           align-items:flex-start;flex-wrap:wrap;
-        }}
-        img {{
+        }
+        img {
           border-radius:10px;border:2px solid #333;
           box-shadow:0 0 8px #000;
-        }}
-        h3 {{color:#0ff}}
+        }
+        h3 {color:#0ff}
       </style>
     </head>
     <body>
@@ -117,7 +114,7 @@ def index():
       <div class="box">
         <div>
           <h3>🎥 Live from ESP32-CAM</h3>
-          <iframe src="{ESP32_STREAM_URL}" width="320" height="240"
+          <iframe src="''' + ESP32_STREAM_URL + '''" width="320" height="240"
                   style="border:none;border-radius:10px;overflow:hidden;">
           </iframe>
         </div>
@@ -128,36 +125,18 @@ def index():
         </div>
       </div>
 
-      <p id="status">Loading sensor data...</p>
-
       <script>
-        async function updateStatus() {{
-          try {{
-            const res = await fetch('/status');
-            const data = await res.json();
-            document.getElementById('status').innerText =
-              `📏 Distance: ${data.distance_cm?.toFixed(1) || 'N/A'} cm | Obstacle: ${data.obstacle ? 'YES' : 'NO'}`;
-          }} catch(e) {{
-            console.log(e);
-          }}
-        }}
-
-        function refreshDetected() {{
+        function refreshDetected() {
           const img = document.getElementById('det');
           img.src = '/detected?t=' + new Date().getTime();
-        }}
-
-        setInterval(updateStatus, 1000);
-        setInterval(refreshDetected, 500);
+        }
+        setInterval(refreshDetected, 500); // update mỗi 0.5 giây
       </script>
     </body>
     </html>
-    """
+    '''
     return render_template_string(html)
 
-@app.route("/status")
-def status():
-    return jsonify(latest_sensor)
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
