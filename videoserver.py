@@ -108,17 +108,28 @@ def index():
     html = f"""
     <html>
     <head>
-      <title>Matthew Robot — Face Detection</title>
+      <title>Matthew Robot — Face + Voice</title>
       <style>
-        body {{ background:#111; color:#eee; text-align:center; font-family:sans-serif; }}
+        body {{
+          background:#111; color:#eee; text-align:center; font-family:sans-serif;
+        }}
         h2 {{ color:#0ff; }}
-        .grid {{ display:flex; justify-content:center; gap:50px; flex-wrap:wrap; margin-top:30px; }}
-        iframe, img {{ border-radius:10px; border:2px solid #333; box-shadow:0 0 8px #000; }}
-        h3 {{ color:#0ff; }}
+        .grid {{
+          display:flex; justify-content:center; gap:50px; flex-wrap:wrap; margin-top:30px;
+        }}
+        iframe, img {{
+          border-radius:10px; border:2px solid #333; box-shadow:0 0 8px #000;
+        }}
+        button {{
+          margin:10px; padding:10px 20px; font-size:16px; border:none;
+          border-radius:6px; cursor:pointer; background:#0ff; color:#000;
+        }}
+        button:disabled {{ opacity:0.5; cursor:not-allowed; }}
+        audio {{ margin-top:20px; }}
       </style>
     </head>
     <body>
-      <h2>🤖 Matthew Robot — Face Detection</h2>
+      <h2>🤖 Matthew Robot — Face + Voice Interaction</h2>
       <div class="grid">
         <div>
           <h3>🎥 Live from ESP32-CAM</h3>
@@ -129,12 +140,77 @@ def index():
           <img id="det" src="/detected" width="320" height="240">
         </div>
       </div>
+
+      <div style="margin-top:40px;">
+        <h3>🎙️ Voice Interaction</h3>
+        <button id="startBtn" onclick="startRecording()">🎤 Start Recording</button>
+        <button id="stopBtn" onclick="stopRecording()" disabled>⏹️ Stop</button>
+        <p id="status"></p>
+        <audio id="audioPlayer" controls></audio>
+      </div>
+
       <script>
+        let mediaRecorder;
+        let audioChunks = [];
+
+        async function startRecording() {{
+          try {{
+            const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = e => {{
+              if (e.data.size > 0) audioChunks.push(e.data);
+            }};
+
+            mediaRecorder.onstop = async () => {{
+              const audioBlob = new Blob(audioChunks, {{ type: 'audio/webm' }});
+              const formData = new FormData();
+              formData.append('audio', audioBlob, 'voice.webm');
+
+              document.getElementById('status').innerText = "⏳ Uploading audio...";
+              const res = await fetch('https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio', {{
+                method: 'POST',
+                body: formData
+              }});
+
+              if (!res.ok) {{
+                document.getElementById('status').innerText = "❌ Upload failed.";
+                return;
+              }}
+
+              const blob = await res.blob();
+              const audioURL = URL.createObjectURL(blob);
+              const player = document.getElementById('audioPlayer');
+              player.src = audioURL;
+              player.play();
+              document.getElementById('status').innerText = "✅ Response audio received!";
+            }};
+
+            mediaRecorder.start();
+            document.getElementById('status').innerText = "🎙️ Recording...";
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+          }} catch (err) {{
+            console.error(err);
+            alert('Microphone access denied or error occurred.');
+          }}
+        }}
+
+        function stopRecording() {{
+          if (mediaRecorder && mediaRecorder.state !== "inactive") {{
+            mediaRecorder.stop();
+            document.getElementById('status').innerText = "Processing audio...";
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+          }}
+        }}
+
         function reloadDet() {{
           const img = document.getElementById('det');
           img.src = '/detected?t=' + new Date().getTime();
         }}
-        setInterval(reloadDet, 300); // cập nhật mỗi 0.3s
+        setInterval(reloadDet, 300);
       </script>
     </body>
     </html>
