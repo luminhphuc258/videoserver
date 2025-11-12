@@ -19,6 +19,9 @@ latest_frame = None
 frame_lock = Lock()
 camera_buffer = {}  # tạm ghép chuỗi Base64 nhiều phần
 
+# ESP32-CAM livestream URL (thay IP theo Serial ESP32 của bạn)
+ESP32_STREAM_URL = "http://192.168.100.134:81/stream"
+
 # ---------- MQTT callbacks ----------
 def handle_camera_part(topic, payload):
     global latest_frame
@@ -73,49 +76,75 @@ def mqtt_thread():
 
 threading.Thread(target=mqtt_thread, daemon=True).start()
 
-# ---------- MJPEG stream from MQTT frames ----------
-def gen_frames():
-    print("🎥 Streaming frames from MQTT...")
-    while True:
-        with frame_lock:
-            frame = None if latest_frame is None else latest_frame.copy()
-        if frame is not None:
-            # Giảm kích thước cho mượt hơn
-            frame_small = cv2.resize(frame, (150, 150))
-            ok, jpeg = cv2.imencode(".jpg", frame_small, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            if ok:
-                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
-                       jpeg.tobytes() + b"\r\n")
-        time.sleep(0.05)  # ~20 FPS
-
-@app.route("/video")
-def video_feed():
-    return Response(gen_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+# ---------- Endpoint trả ảnh nhận dạng ----------
+@app.route("/detected")
+def detected():
+    with frame_lock:
+        f = None if latest_frame is None else latest_frame.copy()
+    if f is None:
+        return Response(status=404)
+    ok, jpeg = cv2.imencode(".jpg", f, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    if not ok:
+        return Response(status=500)
+    return Response(jpeg.tobytes(), mimetype='image/jpeg')
 
 # ---------- UI ----------
 @app.route("/")
 def index():
-    html = """
+    html = f"""
     <html>
     <head>
-      <title>Matthew Robot Mini Stream</title>
+      <title>Matthew Robot Dashboard</title>
       <style>
-        body {background:#111;color:#eee;text-align:center;font-family:sans-serif;}
-        img {border-radius:8px;border:2px solid #444;}
+        body {{
+          background:#111;color:#eee;text-align:center;
+          font-family:sans-serif;margin-top:30px;
+        }}
+        .box {{
+          display:flex;justify-content:center;gap:50px;
+          align-items:flex-start;flex-wrap:wrap;
+        }}
+        img {{
+          border-radius:10px;border:2px solid #333;
+          box-shadow:0 0 8px #000;
+        }}
+        h3 {{color:#0ff}}
       </style>
     </head>
     <body>
-      <h3>🤖 Camera live from MQTT</h3>
-      <img src="/video" width="150" height="150">
+      <h2>🤖 Matthew Robot — Live & AI View</h2>
+
+      <div class="box">
+        <div>
+          <h3>🎥 Live from ESP32-CAM</h3>
+          <iframe src="{ESP32_STREAM_URL}" width="320" height="240"
+                  style="border:none;border-radius:10px;overflow:hidden;">
+          </iframe>
+        </div>
+
+        <div>
+          <h3>🧠 AI Detected Frame (from MQTT)</h3>
+          <img id="det" src="/detected" width="320" height="240">
+        </div>
+      </div>
+
       <p id="status"></p>
+
       <script>
-        async function updateStatus(){
-          const res = await fetch('/status');
-          const data = await res.json();
+        async function updateStatus(){{
+          const r = await fetch('/status');
+          const d = await r.json();
           document.getElementById('status').innerText =
-            `Distance: ${data.distance_cm} cm | Obstacle: ${data.obstacle}`;
-        }
+            `📏 Distance: ${'{:.1f}'.format(latest_sensor['distance_cm']) if 'distance_cm' in latest_sensor else 'N/A'} cm | Obstacle: ${'{latest_sensor['obstacle'] if 'obstacle' in latest_sensor else 'N/A'}`}
+        }}
+
+        function refreshDetected(){{
+          const img = document.getElementById('det');
+          img.src = '/detected?t=' + new Date().getTime();
+        }}
+
         setInterval(updateStatus, 1000);
+        setInterval(refreshDetected, 500);  // cập nhật khung nhận dạng 2 FPS
       </script>
     </body>
     </html>
