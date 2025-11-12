@@ -1,5 +1,5 @@
 from flask import Flask, Response, render_template_string, jsonify
-import cv2, time, ssl, json, threading, numpy as np
+import cv2, time, ssl, json, threading, numpy as np, base64
 from paho.mqtt import client as mqtt
 from threading import Lock
 
