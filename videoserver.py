@@ -1,5 +1,5 @@
 from flask import Flask, Response, render_template_string
-import cv2, time, ssl, json, threading, base64, numpy as np
+import cv2, ssl, threading, base64, numpy as np
 from threading import Lock
 from paho.mqtt import client as mqtt
 
@@ -78,7 +78,6 @@ def detect_and_draw(frame):
         small, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60)
     )
 
-    # Vẽ khung xanh quanh khuôn mặt
     for (x, y, w, h) in faces:
         x, y, w, h = int(x * 2), int(y * 2), int(w * 2), int(h * 2)
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
@@ -109,13 +108,14 @@ def index():
     <html>
     <head>
       <title>Matthew Robot — Face + Voice</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <style>
         body {{
           background:#111; color:#eee; text-align:center; font-family:sans-serif;
         }}
         h2 {{ color:#0ff; }}
         .grid {{
-          display:flex; justify-content:center; gap:50px; flex-wrap:wrap; margin-top:30px;
+          display:flex; justify-content:center; gap:40px; flex-wrap:wrap; margin-top:30px;
         }}
         iframe, img {{
           border-radius:10px; border:2px solid #333; box-shadow:0 0 8px #000;
@@ -133,7 +133,8 @@ def index():
       <div class="grid">
         <div>
           <h3>🎥 Live from ESP32-CAM</h3>
-          <iframe src="{ESP32_STREAM_URL}" width="320" height="240" style="border:none;"></iframe>
+          <img id="espStream" src="{ESP32_STREAM_URL}" width="320" height="240" alt="ESP32 Stream not available">
+          <p><button onclick="reloadCam()">🔄 Reload Camera</button></p>
         </div>
         <div>
           <h3>🧠 Detected Faces (from MQTT)</h3>
@@ -150,6 +151,15 @@ def index():
       </div>
 
       <script>
+        // 🎥 Cập nhật luồng camera tự động (hỗ trợ Safari/iPad)
+        function reloadCam() {{
+          const cam = document.getElementById('espStream');
+          cam.src = '{ESP32_STREAM_URL}?t=' + new Date().getTime();
+        }}
+        // Reload mỗi 30 giây để tránh iOS ngắt kết nối
+        setInterval(reloadCam, 30000);
+
+        // 🎙️ Voice recording + upload
         let mediaRecorder;
         let audioChunks = [];
 
