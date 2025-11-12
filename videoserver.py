@@ -1,5 +1,5 @@
 from flask import Flask, Response, render_template_string
-import cv2, ssl, threading, base64, numpy as np, requests
+import cv2, time, ssl, json, threading, base64, numpy as np
 from threading import Lock
 from paho.mqtt import client as mqtt
 
@@ -78,6 +78,7 @@ def detect_and_draw(frame):
         small, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60)
     )
 
+    # Vẽ khung xanh quanh khuôn mặt
     for (x, y, w, h) in faces:
         x, y, w, h = int(x * 2), int(y * 2), int(w * 2), int(h * 2)
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
@@ -85,49 +86,17 @@ def detect_and_draw(frame):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
     return frame
 
-# ---------- Proxy stream từ ESP32 để hỗ trợ Safari ----------
-@app.route("/stream")
-def stream_proxy_cv2():
-    """Proxy MJPEG stream từ ESP32 bằng OpenCV, tương thích Safari/iPad"""
-    def generate():
-        cap = cv2.VideoCapture(ESP32_STREAM_URL)
-        if not cap.isOpened():
-            print("❌ Không thể mở camera ESP32-CAM")
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + open_blank_frame() + b"\r\n"
-            return
-
-        print("✅ Đang proxy luồng ESP32-CAM qua OpenCV...")
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("⚠️ Mất frame từ ESP32-CAM, thử lại...")
-                break
-            _, jpeg = cv2.imencode(".jpg", frame)
-            yield (b"--frame\r\n"
-                   b"Content-Type: image/jpeg\r\n\r\n" +
-                   jpeg.tobytes() + b"\r\n")
-        cap.release()
-
-    return Response(
-        generate(),
-        mimetype="multipart/x-mixed-replace; boundary=frame"
-    )
-
-def open_blank_frame():
-    """Trả về khung trắng khi không có camera"""
-    img = 255 * np.ones((240, 320, 3), np.uint8)
-    cv2.putText(img, "Camera offline", (60, 130),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-    ok, jpeg = cv2.imencode(".jpg", img)
-    return jpeg.tobytes()
-
 # ---------- API trả ảnh nhận dạng ----------
 @app.route("/detected")
 def detected():
     with frame_lock:
         f = None if latest_frame is None else latest_frame.copy()
     if f is None:
-        return Response(open_blank_frame(), mimetype="image/jpeg")
+        img = 255 * np.ones((240, 320, 3), np.uint8)
+        cv2.putText(img, "Loading...", (90, 130),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        ok, jpeg = cv2.imencode(".jpg", img)
+        return Response(jpeg.tobytes(), mimetype="image/jpeg")
 
     result = detect_and_draw(f)
     ok, jpeg = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
@@ -140,14 +109,13 @@ def index():
     <html>
     <head>
       <title>Matthew Robot — Face + Voice</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <style>
         body {{
           background:#111; color:#eee; text-align:center; font-family:sans-serif;
         }}
         h2 {{ color:#0ff; }}
         .grid {{
-          display:flex; justify-content:center; gap:40px; flex-wrap:wrap; margin-top:30px;
+          display:flex; justify-content:center; gap:50px; flex-wrap:wrap; margin-top:30px;
         }}
         iframe, img {{
           border-radius:10px; border:2px solid #333; box-shadow:0 0 8px #000;
@@ -165,8 +133,7 @@ def index():
       <div class="grid">
         <div>
           <h3>🎥 Live from ESP32-CAM</h3>
-          <img id="espStream" src="/stream" width="320" height="240" alt="ESP32 Stream not available">
-          <p><button onclick="reloadCam()">🔄 Reload Camera</button></p>
+          <iframe src="{ESP32_STREAM_URL}" width="320" height="240" style="border:none;"></iframe>
         </div>
         <div>
           <h3>🧠 Detected Faces (from MQTT)</h3>
@@ -183,14 +150,6 @@ def index():
       </div>
 
       <script>
-        // 🎥 Cập nhật luồng camera tự động (hỗ trợ Safari/iPad)
-        function reloadCam() {{
-          const cam = document.getElementById('espStream');
-          cam.src = '/stream?t=' + new Date().getTime();
-        }}
-        setInterval(reloadCam, 30000);
-
-        // 🎙️ Voice recording + upload
         let mediaRecorder;
         let audioChunks = [];
 
