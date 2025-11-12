@@ -87,21 +87,30 @@ def detect_and_draw(frame):
 
 # ---------- Proxy stream từ ESP32 để hỗ trợ Safari ----------
 @app.route("/stream")
-def stream_proxy():
-    """Proxy MJPEG stream từ ESP32-CAM để tương thích Safari/iPad"""
+def stream_proxy_cv2():
+    """Proxy MJPEG stream từ ESP32 bằng OpenCV, tương thích Safari/iPad"""
     def generate():
-        try:
-            with requests.get(ESP32_STREAM_URL, stream=True, timeout=10) as r:
-                for chunk in r.iter_content(chunk_size=1024):
-                    if chunk:
-                        yield chunk
-        except requests.RequestException as e:
-            print("❌ Stream proxy error:", e)
+        cap = cv2.VideoCapture(ESP32_STREAM_URL)
+        if not cap.isOpened():
+            print("❌ Không thể mở camera ESP32-CAM")
             yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + open_blank_frame() + b"\r\n"
+            return
+
+        print("✅ Đang proxy luồng ESP32-CAM qua OpenCV...")
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("⚠️ Mất frame từ ESP32-CAM, thử lại...")
+                break
+            _, jpeg = cv2.imencode(".jpg", frame)
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n\r\n" +
+                   jpeg.tobytes() + b"\r\n")
+        cap.release()
+
     return Response(
         generate(),
-        headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
-        content_type="multipart/x-mixed-replace; boundary=frame"
+        mimetype="multipart/x-mixed-replace; boundary=frame"
     )
 
 def open_blank_frame():
