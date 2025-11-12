@@ -4,7 +4,8 @@ from threading import Lock
 from paho.mqtt import client as mqtt
 
 app = Flask(__name__)
-
+# Tải bộ nhận dạng khuôn mặt Haar Cascade
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 # ===== MQTT config =====
 MQTT_HOST = "rfff7184.ala.us-east-1.emqxsl.com"
 MQTT_PORT = 8883
@@ -56,29 +57,25 @@ def on_message(cli, userdata, msg):
         handle_camera_part(msg.topic, msg.payload)
 
 # ---------- Detect & Draw ----------
+# ---------- Detect face & draw ----------
 def detect_and_draw(frame):
-    """Phát hiện vật thể cơ bản bằng contour & vẽ khung."""
-    # Chuyển BGR → RGB để không bị tông xanh
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    """Phát hiện khuôn mặt và vẽ khung xanh."""
+    # Chuyển BGR -> GRAY để detect nhanh hơn
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Làm mờ nhẹ để giảm nhiễu
-    blur = cv2.GaussianBlur(rgb, (5, 5), 0)
+    # Giảm kích thước để tăng tốc (detect nhanh gấp ~3-4 lần)
+    small = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
 
-    # Chuyển sang ảnh xám rồi phát hiện biên
-    gray = cv2.cvtColor(blur, cv2.COLOR_RGB2GRAY)
-    edges = cv2.Canny(gray, 60, 140)
+    # Phát hiện khuôn mặt
+    faces = face_cascade.detectMultiScale(small, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
 
-    # Tìm các đường viền (contours)
-    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for c in cnts:
-        x, y, w, h = cv2.boundingRect(c)
-        if w * h < 8000:   # bỏ qua vật thể nhỏ
-            continue
-        cv2.rectangle(rgb, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.putText(rgb, "object", (x, y - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        break  # chỉ vẽ vật thể đầu tiên đủ lớn
-    return rgb
+    # Nếu có khuôn mặt, vẽ khung xanh (phóng lại to bằng kích thước thật)
+    for (x, y, w, h) in faces:
+        x, y, w, h = int(x * 2), int(y * 2), int(w * 2), int(h * 2)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
+        cv2.putText(frame, "Face", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8, (0, 255, 0), 2)
+    return frame
 
 
 def mqtt_thread():
@@ -100,13 +97,25 @@ threading.Thread(target=mqtt_thread, daemon=True).start()
 # ---------- Endpoint trả ảnh nhận dạng ----------
 @app.route("/detected")
 def detected():
+    start = time.time()
     with frame_lock:
         f = None if latest_frame is None else latest_frame.copy()
-    if f is None:
-        return Response(status=404)
 
-    # Áp dụng xử lý nhận dạng
+    # Nếu chưa có frame nào, trả ảnh “Loading”
+    if f is None:
+        img = 255 * np.ones((240, 320, 3), np.uint8)
+        cv2.putText(img, "Loading...", (90, 130), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8, (0, 0, 0), 2)
+        ok, jpeg = cv2.imencode(".jpg", img)
+        return Response(jpeg.tobytes(), mimetype='image/jpeg')
+
+    # Áp dụng phát hiện khuôn mặt
     result = detect_and_draw(f)
+
+    # Giới hạn tốc độ xử lý (tối thiểu 0.3 giây/frame)
+    elapsed = time.time() - start
+    if elapsed < 0.3:
+        time.sleep(0.3 - elapsed)
 
     # Mã hóa JPEG và gửi trả
     ok, jpeg = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
