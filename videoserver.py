@@ -1,258 +1,167 @@
-from flask import Flask, Response, render_template_string
-import cv2, ssl, threading, base64, numpy as np, requests
-from threading import Lock
-from paho.mqtt import client as mqtt
+from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
-# ===== Bộ nhận dạng khuôn mặt =====
-face_cascade = cv2.CascadeClassifier(
-    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-)
+# URL NodeJS server của bạn (endpoint nhận audio)
+NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
-# ===== Cấu hình MQTT =====
-MQTT_HOST = "rfff7184.ala.us-east-1.emqxsl.com"
-MQTT_PORT = 8883
-MQTT_USER = "robot_matthew"
-MQTT_PASS = "29061992abCD!yesokmen"
-CAMERA_TOPIC = "robot/camera/#"
-
-mqtt_cli = None
-latest_frame = None
-frame_lock = Lock()
-camera_buffer = {}
-
-# ===== Địa chỉ livestream HTTP của ESP32 =====
-ESP32_STREAM_URL = "http://192.168.100.134:81/stream"  # ⚠️ thay IP thật nếu cần
-
-# ---------- Ghép và decode ảnh từ MQTT ----------
-def handle_camera_part(topic, payload):
-    global latest_frame
-    try:
-        part_key = topic.split("/")[-1]
-        frame_id = "main"
-        if frame_id not in camera_buffer:
-            camera_buffer[frame_id] = b""
-        camera_buffer[frame_id] += payload
-
-        # Khi nhận đủ dữ liệu hoặc tới part cuối thì decode
-        if len(camera_buffer[frame_id]) > 60000 or part_key.endswith("part9"):
-            b64 = camera_buffer[frame_id].decode()
-            del camera_buffer[frame_id]
-            img_bytes = base64.b64decode(b64)
-            npimg = np.frombuffer(img_bytes, np.uint8)
-            frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-            if frame is not None:
-                with frame_lock:
-                    latest_frame = frame
-    except Exception as e:
-        print("❌ handle_camera_part:", e)
-
-# ---------- MQTT event ----------
-def on_connect(cli, userdata, flags, rc, props=None):
-    print(f"✅ MQTT connected rc={rc}")
-    cli.subscribe(CAMERA_TOPIC, qos=0)
-
-def on_message(cli, userdata, msg):
-    if msg.topic.startswith("robot/camera/"):
-        handle_camera_part(msg.topic, msg.payload)
-
-def mqtt_thread():
-    global mqtt_cli
-    mqtt_cli = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="flask_mqtt_face")
-    mqtt_cli.username_pw_set(MQTT_USER, MQTT_PASS)
-    mqtt_cli.tls_set(cert_reqs=ssl.CERT_NONE)
-    mqtt_cli.on_connect = on_connect
-    mqtt_cli.on_message = on_message
-    mqtt_cli.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
-    mqtt_cli.loop_forever()
-
-threading.Thread(target=mqtt_thread, daemon=True).start()
-
-# ---------- Phát hiện khuôn mặt ----------
-def detect_and_draw(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    small = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
-    faces = face_cascade.detectMultiScale(
-        small, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60)
-    )
-    for (x, y, w, h) in faces:
-        x, y, w, h = int(x * 2), int(y * 2), int(w * 2), int(h * 2)
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
-        cv2.putText(frame, "Face", (x, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-    return frame
-
-# ---------- Proxy MJPEG trực tiếp cho Safari/iPad ----------
-@app.route("/stream")
-def stream_direct_proxy():
-    """Proxy nguyên bản MJPEG từ ESP32-CAM — tương thích Safari/iPad 100%"""
-    def generate():
-        try:
-            with requests.get(ESP32_STREAM_URL, stream=True, timeout=5) as r:
-                for chunk in r.iter_content(chunk_size=1024):
-                    if chunk:
-                        yield chunk
-        except requests.exceptions.RequestException as e:
-            print("❌ Stream proxy error:", e)
-            yield (b"--frame\r\n"
-                   b"Content-Type: image/jpeg\r\n\r\n"
-                   + open_blank_frame() + b"\r\n")
-
-    return Response(
-        generate(),
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Connection": "close",
-            "Access-Control-Allow-Origin": "*",
-        },
-        content_type="multipart/x-mixed-replace; boundary=frame"
-    )
-
-def open_blank_frame():
-    """Trả về khung trắng khi không có camera"""
-    img = 255 * np.ones((240, 320, 3), np.uint8)
-    cv2.putText(img, "Camera offline", (60, 130),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-    ok, jpeg = cv2.imencode(".jpg", img)
-    return jpeg.tobytes()
-
-# ---------- API trả ảnh nhận dạng ----------
-@app.route("/detected")
-def detected():
-    with frame_lock:
-        f = None if latest_frame is None else latest_frame.copy()
-    if f is None:
-        return Response(open_blank_frame(), mimetype="image/jpeg")
-
-    result = detect_and_draw(f)
-    ok, jpeg = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-    return Response(jpeg.tobytes(), mimetype="image/jpeg")
-
-# ---------- Giao diện chính ----------
 @app.route("/")
 def index():
     html = f"""
+    <!DOCTYPE html>
     <html>
     <head>
-      <title>Matthew Robot — Face + Voice</title>
+      <meta charset="utf-8">
+      <title>Matthew Voice Control</title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <style>
         body {{
-          background:#111; color:#eee; text-align:center; font-family:sans-serif;
+          background:#111;
+          color:#eee;
+          font-family:sans-serif;
+          text-align:center;
+          padding:20px;
         }}
-        h2 {{ color:#0ff; }}
-        .grid {{
-          display:flex; justify-content:center; gap:40px; flex-wrap:wrap; margin-top:30px;
-        }}
-        img {{
-          border-radius:10px; border:2px solid #333; box-shadow:0 0 8px #000;
+        h2 {{
+          color:#0ff;
         }}
         button {{
-          margin:10px; padding:10px 20px; font-size:16px; border:none;
-          border-radius:6px; cursor:pointer; background:#0ff; color:#000;
+          margin:10px;
+          padding:10px 20px;
+          font-size:16px;
+          border:none;
+          border-radius:6px;
+          cursor:pointer;
         }}
-        button:disabled {{ opacity:0.5; cursor:not-allowed; }}
-        audio {{ margin-top:20px; }}
+        #startBtn {{
+          background:#0af;
+          color:#000;
+        }}
+        #stopBtn {{
+          background:#f44;
+          color:#000;
+        }}
+        #stopBtn:disabled,
+        #startBtn:disabled {{
+          opacity:0.5;
+          cursor:not-allowed;
+        }}
+        #status {{
+          margin-top:15px;
+          font-weight:bold;
+        }}
+        #result {{
+          margin-top:20px;
+          padding:15px;
+          border-radius:8px;
+          background:#222;
+          min-height:60px;
+          text-align:left;
+          white-space:pre-wrap;
+        }}
       </style>
     </head>
     <body>
-      <h2>🤖 Matthew Robot — Face + Voice Interaction</h2>
-      <div class="grid">
-        <div>
-          <h3>🎥 Live from ESP32-CAM</h3>
-          <img id="espStream" src="/stream" width="320" height="240" alt="ESP32 Stream not available">
-          <p><button onclick="reloadCam()">🔄 Reload Camera</button></p>
-        </div>
-        <div>
-          <h3>🧠 Detected Faces (from MQTT)</h3>
-          <img id="det" src="/detected" width="320" height="240">
-        </div>
+      <h2>Matthew Robot — Voice Only</h2>
+
+      <div>
+        <button id="startBtn">Speak</button>
+        <button id="stopBtn" disabled>Stop</button>
       </div>
 
-      <div style="margin-top:40px;">
-        <h3>🎙️ Voice Interaction</h3>
-        <button id="startBtn" onclick="startRecording()">🎤 Start Recording</button>
-        <button id="stopBtn" onclick="stopRecording()" disabled>⏹️ Stop</button>
-        <p id="status"></p>
-        <audio id="audioPlayer" controls></audio>
-      </div>
+      <p id="status">Ready.</p>
+
+      <div id="result"></div>
 
       <script>
-        function reloadCam() {{
-          const cam = document.getElementById('espStream');
-          cam.src = '/stream?t=' + new Date().getTime();
-        }}
-        setInterval(reloadCam, 30000);
-
-        let mediaRecorder;
+        let mediaRecorder = null;
         let audioChunks = [];
 
         async function startRecording() {{
+          // Kiểm tra API
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+            alert("Trình duyệt không hỗ trợ getUserMedia. Hãy dùng Chrome / Edge / Safari mới.");
+            return;
+          }}
+
           try {{
             const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
-            mediaRecorder = new MediaRecorder(stream);
             audioChunks = [];
 
+            mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => {{
-              if (e.data.size > 0) audioChunks.push(e.data);
+              if (e.data && e.data.size > 0) {{
+                audioChunks.push(e.data);
+              }}
             }};
 
             mediaRecorder.onstop = async () => {{
-              const audioBlob = new Blob(audioChunks, {{ type: 'audio/webm' }});
-              const formData = new FormData();
-              formData.append('audio', audioBlob, 'voice.webm');
-
-              document.getElementById('status').innerText = "⏳ Uploading audio...";
-              const res = await fetch('https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio', {{
-                method: 'POST',
-                body: formData
-              }});
-
-              if (!res.ok) {{
-                document.getElementById('status').innerText = "❌ Upload failed.";
+              if (!audioChunks.length) {{
+                document.getElementById("status").innerText = "Không có dữ liệu audio.";
                 return;
               }}
 
-              const blob = await res.blob();
-              const audioURL = URL.createObjectURL(blob);
-              const player = document.getElementById('audioPlayer');
-              player.src = audioURL;
-              player.play();
-              document.getElementById('status').innerText = "✅ Response audio received!";
+              const blob = new Blob(audioChunks); // để browser tự chọn mime
+              const form = new FormData();
+              form.append("audio", blob, "voice.webm");
+
+              document.getElementById("status").innerText = "Uploading to server...";
+              document.getElementById("result").innerText = "";
+
+              try {{
+                const res = await fetch("{NODEJS_UPLOAD_URL}", {{
+                  method: "POST",
+                  body: form
+                }});
+
+                if (!res.ok) {{
+                  document.getElementById("status").innerText = "Upload failed: " + res.status;
+                  return;
+                }}
+
+                const json = await res.json();
+                // NodeJS trả về: {{ status, transcript, label, audio_url }}
+                const txt = 
+                  "Transcript: " + (json.transcript || "") + "\\n" +
+                  "Label: " + (json.label || "") + "\\n" +
+                  "Audio URL: " + (json.audio_url || "");
+                document.getElementById("result").innerText = txt;
+                document.getElementById("status").innerText = "Done.";
+              }} catch (err) {{
+                console.error(err);
+                document.getElementById("status").innerText = "Error: " + err;
+              }}
             }};
 
             mediaRecorder.start();
-            document.getElementById('status').innerText = "🎙️ Recording...";
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('stopBtn').disabled = false;
+            document.getElementById("status").innerText = "Recording...";
+            document.getElementById("startBtn").disabled = true;
+            document.getElementById("stopBtn").disabled = false;
           }} catch (err) {{
             console.error(err);
-            alert('Microphone access denied or error occurred.');
+            alert("Không lấy được quyền micro: " + err);
           }}
         }}
 
         function stopRecording() {{
           if (mediaRecorder && mediaRecorder.state !== "inactive") {{
             mediaRecorder.stop();
-            document.getElementById('status').innerText = "Processing audio...";
-            document.getElementById('startBtn').disabled = false;
-            document.getElementById('stopBtn').disabled = true;
+            document.getElementById("status").innerText = "Processing...";
+            document.getElementById("startBtn").disabled = false;
+            document.getElementById("stopBtn").disabled = true;
           }}
         }}
 
-        function reloadDet() {{
-          const img = document.getElementById('det');
-          img.src = '/detected?t=' + new Date().getTime();
-        }}
-        setInterval(reloadDet, 300);
+        document.getElementById("startBtn").onclick = startRecording;
+        document.getElementById("stopBtn").onclick = stopRecording;
       </script>
     </body>
     </html>
     """
     return render_template_string(html)
 
-# ---------- MAIN ----------
 if __name__ == "__main__":
+    # Nếu chạy local:
+    # app.run(host="0.0.0.0", port=8000, debug=True)
+    # Nếu Railway dùng gunicorn thì chỉ cần để như cũ, không sửa
     app.run(host="0.0.0.0", port=8000, threaded=True)
