@@ -66,7 +66,7 @@ def index():
         // === Anti-noise settings ===
         let vadThreshold = 0.04;       // Avoid fan noise
         let vadCount = 0;
-        let vadRequired = 3;           // Must speak >= 150ms
+        let vadRequired = 80;           // Must speak >= 150ms
 
         let isRecording = false;
 
