@@ -7,176 +7,211 @@ NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.a
 @app.route("/")
 def index():
     html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>Matthew Robot — Wake Word Mode</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body {{
-                background:#111;
-                color:#eee;
-                font-family:sans-serif;
-                text-align:center;
-                padding:20px;
-            }}
-            h2 {{
-                color:#0ff;
-            }}
-            #speakBtn {{
-                background:#0af;
-                padding:12px 26px;
-                border:none;
-                border-radius:8px;
-                font-size:18px;
-                color:#000;
-                cursor:pointer;
-            }}
-            #speakBtn:disabled {{
-                opacity:0.5;
-                cursor:not-allowed;
-            }}
-            #status {{
-                margin-top:15px;
-                font-weight:bold;
-            }}
-            #result {{
-                margin-top:20px;
-                padding:15px;
-                border-radius:8px;
-                background:#222;
-                min-height:60px;
-                text-align:left;
-                white-space:pre-wrap;
-            }}
-        </style>
-    </head>
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Matthew Robot — Wake Word</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <body>
-        <h2>Matthew Robot — Wake Word: "robot"</h2>
+<style>
+body {{
+    background:#111;
+    color:#eee;
+    font-family:sans-serif;
+    text-align:center;
+    padding:20px;
+}}
+h2 {{
+    color:#0ff;
+}}
+button {{
+    background:#0af;
+    padding:12px 26px;
+    font-size:18px;
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+}}
+#status {{
+    margin-top:12px;
+    font-weight:bold;
+}}
+#result {{
+    margin-top:20px;
+    background:#222;
+    padding:15px;
+    border-radius:8px;
+    min-height:80px;
+    text-align:left;
+    white-space:pre-wrap;
+}}
+</style>
+</head>
 
-        <button id="speakBtn">Speak</button>
+<body>
 
-        <p id="status">Ready.</p>
-        <div id="result"></div>
+<h2>Matthew Robot — Wake Word: "robot"</h2>
 
-        <script>
-        let mediaRecorder = null;
-        let chunks = [];
-        let isRecording = false;
-        let lastVoiceTime = 0;
+<button id="startBtn">Speak</button>
 
-        let STOP_GAP = 600; // 0.6s im lặng thì stop ghi âm
+<p id="status">Ready.</p>
+<div id="result"></div>
 
-        // ===== Speech Recognition =====
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        let recognizer = null;
 
-        function startSpeechRecognition() {{
-            recognizer = new SpeechRecognition();
-            recognizer.lang = "en-US";
-            recognizer.continuous = true;
-            recognizer.interimResults = true;
+<script>
+// =====================================================================
+// CONSTANTS
+// =====================================================================
+const STOP_GAP = 700;   // 0.7s im lặng là stop
+const WAKEWORD = "robot";
 
-            recognizer.onresult = (event) => {{
-                const txt = event.results[event.results.length - 1][0].transcript.toLowerCase();
+// =====================================================================
+// GLOBALS
+// =====================================================================
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let lastVoiceTime = 0;
 
-                console.log("ASR:", txt);
+let recognizer = null;
+let stream = null;
 
-                // nếu chứa wake-word "robot"
-                if (txt.includes("robot")) {{
-                    console.log("Wake-word detected: robot");
 
-                    if (!isRecording) {{
-                        startRecording();
-                        document.getElementById("status").innerText = "🎤 Recording (wake-word)…";
-                    }}
-                }}
+// =====================================================================
+// START RECORDING RAW AUDIO (upload to server)
+// =====================================================================
+async function startRecording() {
+    if (isRecording) return;
 
-                lastVoiceTime = performance.now();
-            }};
+    console.log("🎤 START recording...");
+    document.getElementById("status").innerText = "Recording after wake word...";
 
-            recognizer.onend = () => recognizer.start();
-            recognizer.start();
-        }}
+    if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
 
-        // ===== MediaRecorder (real audio upload) =====
-        let stream = null;
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
 
-        async function startRecording() {{
-            if (isRecording) return;
+    mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+    };
 
-            if (!stream) {{
-                stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
-            }}
+    mediaRecorder.onstop = async () => {
+        console.log("🛑 STOP recording");
 
-            chunks = [];
-            mediaRecorder = new MediaRecorder(stream);
+        if (!audioChunks.length) {
+            console.log("⚠ No audio chunks");
+            return;
+        }
 
-            mediaRecorder.ondataavailable = e => {{
-                if (e.data.size > 0) chunks.push(e.data);
-            }};
+        const blob = new Blob(audioChunks, { type: "audio/webm" });
+        audioChunks = [];
 
-            mediaRecorder.onstop = async () => {{
-                if (!chunks.length) return;
+        const form = new FormData();
+        form.append("audio", blob, "voice.webm");
 
-                const blob = new Blob(chunks, {{ type: "audio/webm" }});
-                chunks = [];
+        document.getElementById("status").innerText = "Uploading...";
 
-                const form = new FormData();
-                form.append("audio", blob, "voice.webm");
+        const res = await fetch("{NODEJS_UPLOAD_URL}", {
+            method: "POST",
+            body: form,
+        });
 
-                document.getElementById("status").innerText = "Uploading...";
+        const json = await res.json();
+        document.getElementById("result").innerText =
+            "Transcript: " + (json.transcript || "") + "\\n" +
+            "Label: " + (json.label || "") + "\\n" +
+            "Audio URL: " + (json.audio_url || "");
 
-                const res = await fetch("{NODEJS_UPLOAD_URL}", {{
-                    method: "POST",
-                    body: form
-                }});
+        document.getElementById("status").innerText = "Ready.";
+    };
 
-                const json = await res.json();
+    mediaRecorder.start();
+    isRecording = true;
+}
 
-                document.getElementById("result").innerText =
-                    "Transcript: " + (json.transcript || "") + "\\n" +
-                    "Label: " + (json.label || "") + "\\n" +
-                    "Audio URL: " + (json.audio_url || "");
+// =====================================================================
+// STOP RECORDING
+// =====================================================================
+function stopRecording() {
+    if (isRecording && mediaRecorder.state !== "inactive") {
+        console.log("⏹ Force stop recording");
+        isRecording = false;
+        mediaRecorder.stop();
+    }
+}
 
-                document.getElementById("status").innerText = "Ready.";
-            }};
+// =====================================================================
+// SPEECH RECOGNITION SETUP
+// =====================================================================
+function startWakeWordListening() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        alert("Browser does not support SpeechRecognition (Chrome recommended).");
+        return;
+    }
 
-            mediaRecorder.start();
-            isRecording = true;
-        }}
+    recognizer = new SpeechRecognition();
+    recognizer.lang = "en-US";
+    recognizer.continuous = true;
+    recognizer.interimResults = true;
 
-        function stopRecording() {{
-            if (isRecording) {{
-                isRecording = false;
-                mediaRecorder.stop();
-            }}
-        }}
+    recognizer.onresult = (event) => {
+        const txt = event.results[event.results.length - 1][0].transcript.toLowerCase();
+        console.log("ASR:", txt);
 
-        // ===== LOOP kiểm tra tiếng dừng =====
-        setInterval(() => {{
-            if (isRecording) {{
-                const now = performance.now();
+        lastVoiceTime = performance.now();
 
-                if (now - lastVoiceTime > STOP_GAP) {{
-                    stopRecording();
-                }}
-            }}
-        }}, 200);
+        // CHECK WAKE WORD
+        if (txt.includes(WAKEWORD)) {
+            console.log("🔥 WAKE-WORD DETECTED:", WAKEWORD);
+            startRecording();
+        }
+    };
 
-        // ===== Start Listening =====
-        document.getElementById("speakBtn").onclick = async () => {{
-            document.getElementById("speakBtn").disabled = true;
-            document.getElementById("status").innerText = "Listening for wake-word: robot…";
+    recognizer.onerror = (e) => console.error("ASR error:", e);
+    recognizer.onend = () => {
+        console.log("ASR ended → restarting...");
+        recognizer.start();
+    };
 
-            await navigator.mediaDevices.getUserMedia({{ audio: true }});
-            startSpeechRecognition();
-        }};
-        </script>
-    </body>
-    </html>
+    recognizer.start();
+    console.log("🎧 Wake-word listener started");
+}
+
+
+// =====================================================================
+// CHECK FOR SILENCE (STOP RECORDING)
+// =====================================================================
+setInterval(() => {
+    if (isRecording) {
+        const now = performance.now();
+        if (now - lastVoiceTime > STOP_GAP) {
+            stopRecording();
+        }
+    }
+}, 200);
+
+
+// =====================================================================
+// BUTTON HANDLER
+// =====================================================================
+document.getElementById("startBtn").onclick = async () => {
+    document.getElementById("startBtn").disabled = true;
+    document.getElementById("status").innerText = "Listening for wake-word: robot…";
+
+    // Ask mic permission ONCE
+    await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    // Start SpeechRecognition
+    startWakeWordListening();
+};
+</script>
+
+</body>
+</html>
     """
     return render_template_string(html)
 
