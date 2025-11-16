@@ -6,7 +6,8 @@ NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.a
 
 @app.route("/")
 def index():
-    html = f"""
+    html = """
+     {% raw %}
 <!DOCTYPE html>
 <html>
 <head>
@@ -172,6 +173,7 @@ def index():
   </script>
 </body>
 </html>
+ {% endraw %}
 """
     return render_template_string(html)
 
