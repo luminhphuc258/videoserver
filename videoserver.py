@@ -1,180 +1,152 @@
-from flask import Flask, Response
+from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
-
 @app.route("/")
 def index():
-    return Response("""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Matthew Robot — Active Listening</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body {
-      background:#111;
-      color:#eee;
-      font-family:sans-serif;
-      text-align:center;
-      padding:20px;
-    }
-    h2 {
-      color:#0ff;
-    }
-    #speakBtn {
-      margin:10px;
-      padding:12px 28px;
-      font-size:18px;
-      font-weight:bold;
-      border:none;
-      border-radius:8px;
-      cursor:pointer;
-      background:#0af;
-      color:#000;
-    }
-    #speakBtn.active {
-      background:#0f0;
-      color:#000;
-    }
-    #status {
-      margin-top:15px;
-      font-weight:bold;
-      color:#0f0;
-    }
-    #result {
-      margin-top:20px;
-      padding:15px;
-      border-radius:8px;
-      background:#222;
-      min-height:60px;
-      text-align:left;
-      white-space:pre-wrap;
-    }
-  </style>
-</head>
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Matthew Robot — Active Listening</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body {{
+          background:#111;
+          color:#eee;
+          font-family:sans-serif;
+          text-align:center;
+          padding:20px;
+        }}
+        #speakBtn {{
+          padding:12px 26px;
+          font-size:18px;
+          border:none;
+          background:#0af;
+          color:#000;
+          border-radius:8px;
+          cursor:pointer;
+        }}
+        #status {{
+          margin-top:18px;
+          font-size:18px;
+          color:#0ff;
+          font-weight:bold;
+        }}
+        #result {{
+          margin-top:20px;
+          padding:15px;
+          border-radius:8px;
+          background:#222;
+          min-height:60px;
+          text-align:left;
+          white-space:pre-wrap;
+        }}
+      </style>
+    </head>
 
-<body>
-  <h2>Matthew Robot — Active Listening Mode</h2>
+    <body>
+      <h2>Matthew Robot — Active Listening Mode</h2>
 
-  <button id="speakBtn">🎤 Start Listening</button>
-  <p id="status">Idle.</p>
+      <button id="speakBtn">🎤 Speak</button>
 
-  <div id="result"></div>
+      <p id="status">Idle.</p>
+      <div id="result"></div>
 
-<script>
-let mediaRecorder = null;
-let audioChunks = [];
-let vadActive = false;
-let listening = false;
-let checkInterval = null;
+      <script>
+        let audioContext;
+        let processor;
+        let stream;
+        let mediaRecorder;
+        let chunks = [];
 
-// độ nhạy VAD
-let vadThreshold = 0.015;
+        // === Anti-noise settings ===
+        let vadThreshold = 0.04;       // Avoid fan noise
+        let vadCount = 0;
+        let vadRequired = 3;           // Must speak >= 150ms
 
-// ================= VAD DETECTOR ==================
-async function createVAD(stream) {
-    const audioCtx = new AudioContext();
-    const src = audioCtx.createMediaStreamSource(stream);
-    const processor = audioCtx.createScriptProcessor(2048, 1, 1);
+        let isRecording = false;
 
-    processor.onaudioprocess = (e) => {
-        const data = e.inputBuffer.getChannelData(0);
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-        const rms = Math.sqrt(sum / data.length);
+        document.getElementById("speakBtn").onclick = startListening;
 
-        vadActive = rms > vadThreshold;
+        async function startListening() {{
+          document.getElementById("status").innerText = "🎧 Listening...";
+          document.getElementById("result").innerText = "";
 
-        if (vadActive)
-          document.getElementById("status").innerText = "🎤 Voice detected...";
-    };
+          stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          processor = audioContext.createScriptProcessor(1024, 1, 1);
 
-    src.connect(processor);
-    processor.connect(audioCtx.destination);
-}
+          const source = audioContext.createMediaStreamSource(stream);
+          source.connect(processor);
+          processor.connect(audioContext.destination);
 
-// ================= START LISTENING ==================
-async function startListening() {
-    if (listening) return;
+          chunks = [];
+          mediaRecorder = new MediaRecorder(stream);
 
-    listening = true;
-    document.getElementById("speakBtn").classList.add("active");
-    document.getElementById("speakBtn").innerText = "🟢 Listening…";
-    document.getElementById("status").innerText = "Listening...";
+          mediaRecorder.ondataavailable = (e) => {{
+            if (e.data.size > 0) chunks.push(e.data);
+          }};
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-            noiseSuppression: true,
-            echoCancellation: true,
-            autoGainControl: true
-        }
-    });
+          mediaRecorder.onstop = async () => {{
+            const blob = new Blob(chunks, {{ type: "audio/webm" }});
+            const form = new FormData();
+            form.append("audio", blob, "voice.webm");
 
-    await createVAD(stream);
+            document.getElementById("status").innerText = "⏫ Uploading...";
 
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) audioChunks.push(e.data);
-    };
-
-    mediaRecorder.onstop = async () => {
-        if (!audioChunks.length) return;
-
-        const blob = new Blob(audioChunks, { type: "audio/webm" });
-        audioChunks = [];
-
-        const form = new FormData();
-        form.append("audio", blob, "voice.webm");
-
-        document.getElementById("status").innerText = "Uploading...";
-
-        try {
-            const res = await fetch("%s", {
-                method: "POST",
-                body: form
-            });
+            const res = await fetch("{NODEJS_UPLOAD_URL}", {{
+              method: "POST",
+              body: form
+            }});
 
             const json = await res.json();
+            document.getElementById("result").innerText =
+              "Transcript: " + (json.transcript || "") + "\\n" +
+              "Label: " + (json.label || "") + "\\n" +
+              "Audio URL: " + (json.audio_url || "");
 
-            const txt =
-                "Transcript: " + (json.transcript || "") + "\\n" +
-                "Label: " + (json.label || "") + "\\n" +
-                "Audio URL: " + (json.audio_url || "");
+            document.getElementById("status").innerText = "✔ Done, waiting for next speech...";
+            isRecording = false;
+          }};
 
-            document.getElementById("result").innerText = txt;
-            document.getElementById("status").innerText = "Listening...";
+          processor.onaudioprocess = (e) => {{
+            const input = e.inputBuffer.getChannelData(0);
+            let sum = 0;
+            for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+            
+            const rms = Math.sqrt(sum / input.length);
 
-        } catch (err) {
-            console.error(err);
-            document.getElementById("status").innerText = "Upload error.";
-        }
-    };
+            // === Voice Detection with noise filtering ===
+            if (rms > vadThreshold) {{
+              vadCount++;
+            }} else {{
+              vadCount = 0;
+            }}
 
-    // check every 200ms
-    checkInterval = setInterval(() => {
-        if (vadActive && mediaRecorder.state === "inactive") {
-            audioChunks = [];
-            mediaRecorder.start();
-        }
+            const voiceDetected = vadCount >= vadRequired;
 
-        if (!vadActive && mediaRecorder.state === "recording") {
-            mediaRecorder.stop();
-        }
-    }, 200);
-}
+            if (voiceDetected && !isRecording) {{
+              isRecording = true;
+              chunks = [];
+              mediaRecorder.start();
+              document.getElementById("status").innerText = "🎤 Voice detected! Recording...";
+            }}
 
-document.getElementById("speakBtn").onclick = startListening;
-
-</script>
-
-</body>
-</html>
-""" % NODEJS_UPLOAD_URL, mimetype="text/html")
-
+            if (!voiceDetected && isRecording) {{
+              mediaRecorder.stop();
+              document.getElementById("status").innerText = "⏳ Processing...";
+            }}
+          }};
+        }}
+      </script>
+    </body>
+    </html>
+    """
+    return render_template_string(html)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, threaded=True)
