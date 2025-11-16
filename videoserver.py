@@ -2,7 +2,6 @@ from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
-# NodeJS endpoint nhận audio
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
 @app.route("/")
@@ -12,7 +11,7 @@ def index():
     <html>
     <head>
         <meta charset="utf-8">
-        <title>Matthew Robot — Active Listening</title>
+        <title>Matthew Robot — Wake Word Mode</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {{
@@ -55,7 +54,7 @@ def index():
     </head>
 
     <body>
-        <h2>Matthew Robot — Active Listening</h2>
+        <h2>Matthew Robot — Wake Word: "robot"</h2>
 
         <button id="speakBtn">Speak</button>
 
@@ -66,30 +65,55 @@ def index():
         let mediaRecorder = null;
         let chunks = [];
         let isRecording = false;
-
-        let speakingStart = 0;
         let lastVoiceTime = 0;
 
-        // === VAD config ===
-        let vadThreshold = 0.04;      // chống tiếng quạt nền
-        let VAD_START_TIME = 4000;    // 4 giây nói liên tục thì bắt đầu ghi
-        let VAD_STOP_GAP = 600;       // 0.6 giây im lặng thì stop
+        let STOP_GAP = 600; // 0.6s im lặng thì stop ghi âm
 
-        async function startListening() {{
-            document.getElementById("speakBtn").disabled = true;
+        // ===== Speech Recognition =====
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognizer = null;
 
-            const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
-            const audioCtx = new AudioContext();
-            const source = audioCtx.createMediaStreamSource(stream);
+        function startSpeechRecognition() {{
+            recognizer = new SpeechRecognition();
+            recognizer.lang = "en-US";
+            recognizer.continuous = true;
+            recognizer.interimResults = true;
 
-            // Processor
-            const processor = audioCtx.createScriptProcessor(2048, 1, 1);
-            source.connect(processor);
-            processor.connect(audioCtx.destination);
+            recognizer.onresult = (event) => {{
+                const txt = event.results[event.results.length - 1][0].transcript.toLowerCase();
 
-            // MediaRecorder
+                console.log("ASR:", txt);
+
+                // nếu chứa wake-word "robot"
+                if (txt.includes("robot")) {{
+                    console.log("Wake-word detected: robot");
+
+                    if (!isRecording) {{
+                        startRecording();
+                        document.getElementById("status").innerText = "🎤 Recording (wake-word)…";
+                    }}
+                }}
+
+                lastVoiceTime = performance.now();
+            }};
+
+            recognizer.onend = () => recognizer.start();
+            recognizer.start();
+        }}
+
+        // ===== MediaRecorder (real audio upload) =====
+        let stream = null;
+
+        async function startRecording() {{
+            if (isRecording) return;
+
+            if (!stream) {{
+                stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+            }}
+
+            chunks = [];
             mediaRecorder = new MediaRecorder(stream);
-            
+
             mediaRecorder.ondataavailable = e => {{
                 if (e.data.size > 0) chunks.push(e.data);
             }};
@@ -120,44 +144,36 @@ def index():
                 document.getElementById("status").innerText = "Ready.";
             }};
 
-            // === ACTIVE VAD ===
-            processor.onaudioprocess = (e) => {{
-                const input = e.inputBuffer.getChannelData(0);
-
-                let sum = 0;
-                for (let i = 0; i < input.length; i++)
-                    sum += input[i] * input[i];
-
-                const rms = Math.sqrt(sum / input.length);
-                const now = performance.now();
-
-                if (rms > vadThreshold) {{
-                    // đang nói
-                    lastVoiceTime = now;
-                    if (speakingStart === 0) speakingStart = now;
-
-                    // BẮT ĐẦU GHI ÂM (nếu nói >= 4s)
-                    if (!isRecording && (now - speakingStart >= VAD_START_TIME)) {{
-                        isRecording = true;
-                        mediaRecorder.start();
-                        document.getElementById("status").innerText = "🎤 Recording...";
-                    }}
-                }} else {{
-                    // im lặng
-                    speakingStart = 0;
-
-                    if (isRecording && (now - lastVoiceTime > VAD_STOP_GAP)) {{
-                        isRecording = false;
-                        mediaRecorder.stop();
-                        document.getElementById("status").innerText = "⏳ Processing...";
-                    }}
-                }}
-            }};
-
-            document.getElementById("status").innerText = "Listening...";
+            mediaRecorder.start();
+            isRecording = true;
         }}
 
-        document.getElementById("speakBtn").onclick = startListening;
+        function stopRecording() {{
+            if (isRecording) {{
+                isRecording = false;
+                mediaRecorder.stop();
+            }}
+        }}
+
+        // ===== LOOP kiểm tra tiếng dừng =====
+        setInterval(() => {{
+            if (isRecording) {{
+                const now = performance.now();
+
+                if (now - lastVoiceTime > STOP_GAP) {{
+                    stopRecording();
+                }}
+            }}
+        }}, 200);
+
+        // ===== Start Listening =====
+        document.getElementById("speakBtn").onclick = async () => {{
+            document.getElementById("speakBtn").disabled = true;
+            document.getElementById("status").innerText = "Listening for wake-word: robot…";
+
+            await navigator.mediaDevices.getUserMedia({{ audio: true }});
+            startSpeechRecognition();
+        }};
         </script>
     </body>
     </html>
