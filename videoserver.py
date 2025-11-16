@@ -2,219 +2,166 @@ from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
+# URL NodeJS server của bạn (endpoint nhận audio)
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
 @app.route("/")
 def index():
     html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Matthew Robot — Wake Word</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Matthew Voice Control</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body {{
+          background:#111;
+          color:#eee;
+          font-family:sans-serif;
+          text-align:center;
+          padding:20px;
+        }}
+        h2 {{
+          color:#0ff;
+        }}
+        button {{
+          margin:10px;
+          padding:10px 20px;
+          font-size:16px;
+          border:none;
+          border-radius:6px;
+          cursor:pointer;
+        }}
+        #startBtn {{
+          background:#0af;
+          color:#000;
+        }}
+        #stopBtn {{
+          background:#f44;
+          color:#000;
+        }}
+        #stopBtn:disabled,
+        #startBtn:disabled {{
+          opacity:0.5;
+          cursor:not-allowed;
+        }}
+        #status {{
+          margin-top:15px;
+          font-weight:bold;
+        }}
+        #result {{
+          margin-top:20px;
+          padding:15px;
+          border-radius:8px;
+          background:#222;
+          min-height:60px;
+          text-align:left;
+          white-space:pre-wrap;
+        }}
+      </style>
+    </head>
+    <body>
+      <h2>Matthew Robot — Voice Only</h2>
 
-<style>
-body {{
-    background:#111;
-    color:#eee;
-    font-family:sans-serif;
-    text-align:center;
-    padding:20px;
-}}
-h2 {{
-    color:#0ff;
-}}
-button {{
-    background:#0af;
-    padding:12px 26px;
-    font-size:18px;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
-}}
-#status {{
-    margin-top:12px;
-    font-weight:bold;
-}}
-#result {{
-    margin-top:20px;
-    background:#222;
-    padding:15px;
-    border-radius:8px;
-    min-height:80px;
-    text-align:left;
-    white-space:pre-wrap;
-}}
-</style>
-</head>
+      <div>
+        <button id="startBtn">Speak</button>
+        <button id="stopBtn" disabled>Stop</button>
+      </div>
 
-<body>
+      <p id="status">Ready.</p>
 
-<h2>Matthew Robot — Wake Word: "robot"</h2>
+      <div id="result"></div>
 
-<button id="startBtn">Speak</button>
+      <script>
+        let mediaRecorder = null;
+        let audioChunks = [];
 
-<p id="status">Ready.</p>
-<div id="result"></div>
-
-
-<script>
-// =====================================================================
-// CONSTANTS
-// =====================================================================
-const STOP_GAP = 700;   // 0.7s im lặng là stop
-const WAKEWORD = "robot";
-
-// =====================================================================
-// GLOBALS
-// =====================================================================
-let mediaRecorder = null;
-let audioChunks = [];
-let isRecording = false;
-let lastVoiceTime = 0;
-
-let recognizer = null;
-let stream = null;
-
-
-// =====================================================================
-// START RECORDING RAW AUDIO (upload to server)
-// =====================================================================
-async function startRecording() {
-    if (isRecording) return;
-
-    console.log("🎤 START recording...");
-    document.getElementById("status").innerText = "Recording after wake word...";
-
-    if (!stream) {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    }
-
-    audioChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
-
-    mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunks.push(e.data);
-    };
-
-    mediaRecorder.onstop = async () => {
-        console.log("🛑 STOP recording");
-
-        if (!audioChunks.length) {
-            console.log("⚠ No audio chunks");
+        async function startRecording() {{
+          // Kiểm tra API
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+            alert("Trình duyệt không hỗ trợ getUserMedia. Hãy dùng Chrome / Edge / Safari mới.");
             return;
-        }
+          }}
 
-        const blob = new Blob(audioChunks, { type: "audio/webm" });
-        audioChunks = [];
+          try {{
+            const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+            audioChunks = [];
 
-        const form = new FormData();
-        form.append("audio", blob, "voice.webm");
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = e => {{
+              if (e.data && e.data.size > 0) {{
+                audioChunks.push(e.data);
+              }}
+            }};
 
-        document.getElementById("status").innerText = "Uploading...";
+            mediaRecorder.onstop = async () => {{
+              if (!audioChunks.length) {{
+                document.getElementById("status").innerText = "Không có dữ liệu audio.";
+                return;
+              }}
 
-        const res = await fetch("{NODEJS_UPLOAD_URL}", {
-            method: "POST",
-            body: form,
-        });
+              const blob = new Blob(audioChunks); // để browser tự chọn mime
+              const form = new FormData();
+              form.append("audio", blob, "voice.webm");
 
-        const json = await res.json();
-        document.getElementById("result").innerText =
-            "Transcript: " + (json.transcript || "") + "\\n" +
-            "Label: " + (json.label || "") + "\\n" +
-            "Audio URL: " + (json.audio_url || "");
+              document.getElementById("status").innerText = "Uploading to server...";
+              document.getElementById("result").innerText = "";
 
-        document.getElementById("status").innerText = "Ready.";
-    };
+              try {{
+                const res = await fetch("{NODEJS_UPLOAD_URL}", {{
+                  method: "POST",
+                  body: form
+                }});
 
-    mediaRecorder.start();
-    isRecording = true;
-}
+                if (!res.ok) {{
+                  document.getElementById("status").innerText = "Upload failed: " + res.status;
+                  return;
+                }}
 
-// =====================================================================
-// STOP RECORDING
-// =====================================================================
-function stopRecording() {
-    if (isRecording && mediaRecorder.state !== "inactive") {
-        console.log("⏹ Force stop recording");
-        isRecording = false;
-        mediaRecorder.stop();
-    }
-}
+                const json = await res.json();
+                // NodeJS trả về: {{ status, transcript, label, audio_url }}
+                const txt = 
+                  "Transcript: " + (json.transcript || "") + "\\n" +
+                  "Label: " + (json.label || "") + "\\n" +
+                  "Audio URL: " + (json.audio_url || "");
+                document.getElementById("result").innerText = txt;
+                document.getElementById("status").innerText = "Done.";
+              }} catch (err) {{
+                console.error(err);
+                document.getElementById("status").innerText = "Error: " + err;
+              }}
+            }};
 
-// =====================================================================
-// SPEECH RECOGNITION SETUP
-// =====================================================================
-function startWakeWordListening() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        alert("Browser does not support SpeechRecognition (Chrome recommended).");
-        return;
-    }
+            mediaRecorder.start();
+            document.getElementById("status").innerText = "Recording...";
+            document.getElementById("startBtn").disabled = true;
+            document.getElementById("stopBtn").disabled = false;
+          }} catch (err) {{
+            console.error(err);
+            alert("Không lấy được quyền micro: " + err);
+          }}
+        }}
 
-    recognizer = new SpeechRecognition();
-    recognizer.lang = "en-US";
-    recognizer.continuous = true;
-    recognizer.interimResults = true;
+        function stopRecording() {{
+          if (mediaRecorder && mediaRecorder.state !== "inactive") {{
+            mediaRecorder.stop();
+            document.getElementById("status").innerText = "Processing...";
+            document.getElementById("startBtn").disabled = false;
+            document.getElementById("stopBtn").disabled = true;
+          }}
+        }}
 
-    recognizer.onresult = (event) => {
-        const txt = event.results[event.results.length - 1][0].transcript.toLowerCase();
-        console.log("ASR:", txt);
-
-        lastVoiceTime = performance.now();
-
-        // CHECK WAKE WORD
-        if (txt.includes(WAKEWORD)) {
-            console.log("🔥 WAKE-WORD DETECTED:", WAKEWORD);
-            startRecording();
-        }
-    };
-
-    recognizer.onerror = (e) => console.error("ASR error:", e);
-    recognizer.onend = () => {
-        console.log("ASR ended → restarting...");
-        recognizer.start();
-    };
-
-    recognizer.start();
-    console.log("🎧 Wake-word listener started");
-}
-
-
-// =====================================================================
-// CHECK FOR SILENCE (STOP RECORDING)
-// =====================================================================
-setInterval(() => {
-    if (isRecording) {
-        const now = performance.now();
-        if (now - lastVoiceTime > STOP_GAP) {
-            stopRecording();
-        }
-    }
-}, 200);
-
-
-// =====================================================================
-// BUTTON HANDLER
-// =====================================================================
-document.getElementById("startBtn").onclick = async () => {
-    document.getElementById("startBtn").disabled = true;
-    document.getElementById("status").innerText = "Listening for wake-word: robot…";
-
-    // Ask mic permission ONCE
-    await navigator.mediaDevices.getUserMedia({ audio: true });
-
-    // Start SpeechRecognition
-    startWakeWordListening();
-};
-</script>
-
-</body>
-</html>
+        document.getElementById("startBtn").onclick = startRecording;
+        document.getElementById("stopBtn").onclick = stopRecording;
+      </script>
+    </body>
+    </html>
     """
     return render_template_string(html)
 
-
 if __name__ == "__main__":
+    # Nếu chạy local:
+    # app.run(host="0.0.0.0", port=8000, debug=True)
+    # Nếu Railway dùng gunicorn thì chỉ cần để như cũ, không sửa
     app.run(host="0.0.0.0", port=8000, threaded=True)
