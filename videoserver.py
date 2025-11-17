@@ -2,7 +2,7 @@ from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
-# URL NodeJS server của bạn (endpoint nhận audio)
+# URL NodeJS server (để upload audio)
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
 @app.route("/")
@@ -12,7 +12,7 @@ def index():
     <html>
     <head>
       <meta charset="utf-8">
-      <title>Matthew Voice Control</title>
+      <title>Matthew Robot — Voice Control</title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <style>
         body {{
@@ -22,9 +22,8 @@ def index():
           text-align:center;
           padding:20px;
         }}
-        h2 {{
-          color:#0ff;
-        }}
+        h2 {{ color:#0ff; }}
+
         button {{
           margin:10px;
           padding:10px 20px;
@@ -33,113 +32,96 @@ def index():
           border-radius:6px;
           cursor:pointer;
         }}
-        #startBtn {{
-          background:#0af;
-          color:#000;
-        }}
-        #stopBtn {{
-          background:#f44;
-          color:#000;
-        }}
+
+        #startBtn {{ background:#0af; color:#000; }}
+        #stopBtn  {{ background:#f44; color:#000; }}
+        #activeBtn {{ background:#0f0; color:#000; }}
+
         #stopBtn:disabled,
-        #startBtn:disabled {{
+        #startBtn:disabled,
+        #activeBtn:disabled {{
           opacity:0.5;
           cursor:not-allowed;
         }}
+
+        #thresholdBox {{
+          margin-top:10px;
+          padding:8px;
+          width:160px;
+          border-radius:6px;
+          border:none;
+          font-size:15px;
+        }}
+
         #status {{
           margin-top:15px;
           font-weight:bold;
         }}
+
         #result {{
           margin-top:20px;
           padding:15px;
           border-radius:8px;
           background:#222;
-          min-height:60px;
+          min-height:70px;
           text-align:left;
           white-space:pre-wrap;
         }}
       </style>
     </head>
+
     <body>
       <h2>Matthew Robot — Voice Only</h2>
 
+      <!-- Nút Speak/Stop -->
       <div>
         <button id="startBtn">Speak</button>
         <button id="stopBtn" disabled>Stop</button>
       </div>
 
-      <p id="status">Ready.</p>
+      <!-- Active Listening -->
+      <h3 style="color:#0f0; margin-top:30px;">Active Listening Mode</h3>
+      <button id="activeBtn">Activate Listening</button>  
 
+      <br>
+      <input id="thresholdBox" type="number" min="50" max="3000"
+             placeholder="Threshold (vd: 300)" />
+
+      <p id="status">Ready.</p>
       <div id="result"></div>
 
       <script>
         let mediaRecorder = null;
         let audioChunks = [];
+        let listening = false;
+        let audioStream = null;
 
+        // =============================
+        //  GHI THỦ CÔNG: START / STOP
+        // =============================
         async function startRecording() {{
-          // Kiểm tra API
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
-            alert("Trình duyệt không hỗ trợ getUserMedia. Hãy dùng Chrome / Edge / Safari mới.");
+          if (!navigator.mediaDevices) {{
+            alert("Browser không hỗ trợ mic.");
             return;
           }}
 
           try {{
-            const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+            const stream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
             audioChunks = [];
-
             mediaRecorder = new MediaRecorder(stream);
+
             mediaRecorder.ondataavailable = e => {{
-              if (e.data && e.data.size > 0) {{
-                audioChunks.push(e.data);
-              }}
+              if (e.data.size > 0) audioChunks.push(e.data);
             }};
 
-            mediaRecorder.onstop = async () => {{
-              if (!audioChunks.length) {{
-                document.getElementById("status").innerText = "Không có dữ liệu audio.";
-                return;
-              }}
-
-              const blob = new Blob(audioChunks); // để browser tự chọn mime
-              const form = new FormData();
-              form.append("audio", blob, "voice.webm");
-
-              document.getElementById("status").innerText = "Uploading to server...";
-              document.getElementById("result").innerText = "";
-
-              try {{
-                const res = await fetch("{NODEJS_UPLOAD_URL}", {{
-                  method: "POST",
-                  body: form
-                }});
-
-                if (!res.ok) {{
-                  document.getElementById("status").innerText = "Upload failed: " + res.status;
-                  return;
-                }}
-
-                const json = await res.json();
-                // NodeJS trả về: {{ status, transcript, label, audio_url }}
-                const txt = 
-                  "Transcript: " + (json.transcript || "") + "\\n" +
-                  "Label: " + (json.label || "") + "\\n" +
-                  "Audio URL: " + (json.audio_url || "");
-                document.getElementById("result").innerText = txt;
-                document.getElementById("status").innerText = "Done.";
-              }} catch (err) {{
-                console.error(err);
-                document.getElementById("status").innerText = "Error: " + err;
-              }}
-            }};
+            mediaRecorder.onstop = () => uploadAudio();
 
             mediaRecorder.start();
             document.getElementById("status").innerText = "Recording...";
             document.getElementById("startBtn").disabled = true;
             document.getElementById("stopBtn").disabled = false;
-          }} catch (err) {{
-            console.error(err);
-            alert("Không lấy được quyền micro: " + err);
+          }} catch(e) {{
+            alert("Không truy cập được mic: " + e);
           }}
         }}
 
@@ -152,8 +134,123 @@ def index():
           }}
         }}
 
+        // =============================
+        //   ACTIVE LISTENING MODE
+        // =============================
+        document.getElementById("activeBtn").onclick = async function() {{
+          if (listening) return; // tránh double click
+          listening = true;
+
+          const threshold = parseInt(document.getElementById("thresholdBox").value || "300");
+
+          document.getElementById("status").innerText = 
+              "Active Listening ON (threshold = " + threshold + ")";
+
+          // Lấy microphone
+          audioStream = await navigator.mediaDevices.getUserMedia({{
+            audio: {{
+              echoCancellation:false,
+              noiseSuppression:false,
+              sampleRate: 44100
+            }}
+          }});
+
+          const audioCtx = new AudioContext();
+          const source = audioCtx.createMediaStreamSource(audioStream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 2048;
+
+          source.connect(analyser);
+
+          let dataArray = new Uint8Array(analyser.fftSize);
+          let triggered = false;
+          let recordStartTime = 0;
+
+          function loopDetect() {{
+            if (!listening) return;
+
+            analyser.getByteTimeDomainData(dataArray);
+
+            let maxAmp = 0;
+            for (let i=0; i<dataArray.length; i++) {{
+              let amp = Math.abs(dataArray[i] - 128);
+              if (amp > maxAmp) maxAmp = amp;
+            }}
+
+            if (!triggered && maxAmp >= threshold) {{
+              triggered = true;
+              document.getElementById("status").innerText = "Sound detected → start recording (max 5s)";
+              startActiveRecorder();
+            }}
+
+            if (triggered && (Date.now() - recordStartTime) >= 5000) {{
+              stopActiveRecorder();
+              return;
+            }}
+
+            requestAnimationFrame(loopDetect);
+          }}
+
+          function startActiveRecorder() {{
+            audioChunks = [];
+            mediaRecorder = new MediaRecorder(audioStream);
+
+            mediaRecorder.ondataavailable = e => {{
+              if (e.data.size > 0) audioChunks.push(e.data);
+            }};
+
+            mediaRecorder.onstop = uploadAudio;
+
+            mediaRecorder.start();
+            recordStartTime = Date.now();
+          }}
+
+          function stopActiveRecorder() {{
+            listening = false;
+            mediaRecorder.stop();
+            audioStream.getTracks().forEach(t => t.stop());
+          }}
+
+          loopDetect();
+        }}
+
+        // ====================================
+        //           UPLOAD AUDIO
+        // ====================================
+        async function uploadAudio() {{
+          const blob = new Blob(audioChunks);
+          const form = new FormData();
+          form.append("audio", blob, "voice.webm");
+
+          document.getElementById("status").innerText = "Uploading...";
+          document.getElementById("result").innerText = "";
+
+          try {{
+            const res = await fetch("{NODEJS_UPLOAD_URL}", {{
+              method:"POST",
+              body:form
+            }});
+
+            const json = await res.json();
+
+            const txt = 
+              "Transcript: " + (json.transcript || "") + "\\n" +
+              "Label: "       + (json.label || "") + "\\n" +
+              "Audio URL: "   + (json.audio_url || "");
+
+            document.getElementById("result").innerText = txt;
+            document.getElementById("status").innerText = "Done";
+
+          }} catch (e) {{
+            console.log(e);
+            document.getElementById("status").innerText = "Upload error: " + e;
+          }}
+        }}
+
+        // Gán nút
         document.getElementById("startBtn").onclick = startRecording;
         document.getElementById("stopBtn").onclick = stopRecording;
+
       </script>
     </body>
     </html>
@@ -161,7 +258,4 @@ def index():
     return render_template_string(html)
 
 if __name__ == "__main__":
-    # Nếu chạy local:
-    # app.run(host="0.0.0.0", port=8000, debug=True)
-    # Nếu Railway dùng gunicorn thì chỉ cần để như cũ, không sửa
     app.run(host="0.0.0.0", port=8000, threaded=True)
