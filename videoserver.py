@@ -3,9 +3,16 @@ import requests
 
 app = Flask(__name__)
 
+# ==========================================
+# GLOBAL SCAN STATUS
+# ==========================================
+scanStatus = "idle"   # idle | scanning | done
+
+# ==========================================
+# NODEJS ENDPOINTS
+# ==========================================
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
-# ENDPOINT SCAN NODEJS
 NODEJS_SCAN_30   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan30"
 NODEJS_SCAN_45   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan45"
 NODEJS_SCAN_90   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan90"
@@ -13,6 +20,9 @@ NODEJS_SCAN_180  = "https://embeddedprogramming-healtheworldserver.up.railway.ap
 NODEJS_SCAN_360  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
 
 
+# ==========================================
+# HOME PAGE
+# ==========================================
 @app.route("/")
 def index():
     html = f"""
@@ -85,7 +95,7 @@ def index():
   <p id="status">Initializing microphone...</p>
   <div id="result"></div>
 
-  <!-- NEW SCAN BUTTONS -->
+  <!-- ============ SCAN BUTTONS ============ -->
   <h3 style="margin-top:30px; color:#0f0;">Scan Environment</h3>
 
   <div id="scanButtons">
@@ -98,11 +108,9 @@ def index():
 
   <canvas id="mapCanvas" width="400" height="400"></canvas>
 
-
   <script>
-
     /* ================================
-       SCAN COMMAND TO NODEJS
+       SEND SCAN COMMAND TO NODEJS
     ================================ */
     async function triggerScan(url, label) {{
         document.getElementById("status").innerText =
@@ -110,6 +118,7 @@ def index():
 
         try {{
             await fetch(url, {{ method:"GET" }});
+            await fetch("/set_scanning");  // tell flask we are scanning
             alert("Robot is scanning " + label);
         }} catch (e) {{
             alert("Cannot send scan command!");
@@ -117,10 +126,9 @@ def index():
     }}
 
 
-
-    /* =======================================================
-         BELOW IS YOUR AUDIO + LISTENING ENGINE — UNTOUCHED
-       ======================================================= */
+    /* ============================================
+       BELOW IS AUDIO ENGINE — KEEP SAME
+    ============================================ */
 
     let manualStream = null;
     let mediaRecorder = null;
@@ -134,7 +142,6 @@ def index():
     let rafId = null;
     let activeRecorder = null;
 
-
     function clearCache() {{
       if (rafId) cancelAnimationFrame(rafId);
       rafId = null;
@@ -144,9 +151,7 @@ def index():
       }}
       activeRecorder = null;
 
-      if (listenStream) {{
-        listenStream.getTracks().forEach(t => t.stop());
-      }}
+      if (listenStream) listenStream.getTracks().forEach(t => t.stop());
       listenStream = null;
 
       if (audioCtx) {{
@@ -160,17 +165,20 @@ def index():
     }}
 
 
-
     async function startRecordingManual() {{
       manualStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
       audioChunks = [];
-
       mediaRecorder = new MediaRecorder(manualStream);
-      mediaRecorder.ondataavailable = e => {{ if (e.data.size > 0) audioChunks.push(e.data); }};
+
+      mediaRecorder.ondataavailable = e => {{
+        if (e.data.size > 0) audioChunks.push(e.data);
+      }};
+
       mediaRecorder.onstop = () => {{
         manualStream.getTracks().forEach(t => t.stop());
         uploadAudio();
       }};
+
       mediaRecorder.start();
 
       document.getElementById("status").innerText = "Recording (manual)...";
@@ -191,15 +199,13 @@ def index():
     document.getElementById("stopBtn").onclick  = stopRecordingManual;
 
 
-
-    /* ================================
+    /* ============================
        AUTO LISTENING
-    ================================ */
+    ============================ */
     const thresholdAmp = 50;
 
     async function startAutoListening() {{
       clearCache();
-
       try {{
         listenStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
       }} catch(e) {{
@@ -213,7 +219,6 @@ def index():
       source = audioCtx.createMediaStreamSource(listenStream);
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 1024;
-
       source.connect(analyser);
 
       const data = new Uint8Array(analyser.fftSize);
@@ -232,11 +237,9 @@ def index():
         activeRecorder.ondataavailable = e => {{
           if (e.data.size > 0) audioChunks.push(e.data);
         }};
-
         activeRecorder.onstop = () => {{
           uploadAudio(lastTriggeredLevel);
         }};
-
         activeRecorder.start();
         recordStart = Date.now();
       }}
@@ -244,6 +247,7 @@ def index():
       function loop() {{
         analyser.getByteTimeDomainData(data);
         let maxAmp = 0;
+
         for (let i=0; i<data.length; i++) {{
           let amp = Math.abs(data[i] - 128);
           if (amp > maxAmp) maxAmp = amp;
@@ -273,10 +277,9 @@ def index():
     window.onload = startAutoListening;
 
 
-
-    /* ================================
+    /* ============================
        UPLOAD AUDIO
-    ================================ */
+    ============================ */
     async function uploadAudio(triggerLevel = 0) {{
       if (!audioChunks.length) {{
         document.getElementById("status").innerText = "No audio data.";
@@ -312,7 +315,6 @@ def index():
 
           audio.onloadedmetadata = () => {{
             const durationMs = audio.duration * 1000;
-
             audio.play();
 
             const waitTime = durationMs + 2000;
@@ -330,26 +332,57 @@ def index():
         document.getElementById("status").innerText = "Upload error: " + err;
       }}
     }}
-
-
   </script>
+
 </body>
 </html>
     """
     return render_template_string(html)
 
 
+
+# ============================================================
 # ROBOT REPORTS SCAN DONE
+# ============================================================
 @app.route("/scan_done", methods=["POST"])
 def scan_done():
-    print("Robot completed scan.")
-    return {"status": "received"}
+    global scanStatus
+    print("📩 Robot reported scan completed.")
+    scanStatus = "done"
+    return {"status": "ok", "scanStatus": scanStatus}
 
 
+
+# ============================================================
+# NODEJS tells us that a scan has started
+# ============================================================
+@app.route("/set_scanning")
+def set_scanning():
+    global scanStatus
+    scanStatus = "scanning"
+    print("⚡ Scan started → scanStatus = scanning")
+    return {"status": "ok", "scanStatus": scanStatus}
+
+
+
+# ============================================================
+# MODULE CAM BIẾN REQUEST: /get_scanningstatus
+# ============================================================
+@app.route("/get_scanningstatus")
+def get_scanningstatus():
+    return {"scanStatus": scanStatus}
+
+
+
+# ============================================================
+# Just a placeholder for future map drawing
+# ============================================================
 @app.route("/get_map")
 def get_map():
     return {"points": []}
 
 
+
+# ============================================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, threaded=True)
