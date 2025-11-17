@@ -113,7 +113,7 @@ def index():
     //==============================
     //  AUTO ACTIVE LISTENING
     //==============================
-    const thresholdAmp = 40;   // cố định 40
+    const thresholdAmp = 90;   // cố định 40
     let listenStream = null;
     let listening = false;
     let activeRecorder = null;
