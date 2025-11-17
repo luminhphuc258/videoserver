@@ -154,7 +154,7 @@ def index():
     /* ================================
        AUTO ACTIVE LISTENING
     ================================ */
-    const thresholdAmp = 25;
+    const thresholdAmp = 50;
 
     async function startAutoListening() {{
       clearCache();   // reset mọi thứ trước khi bắt đầu lại
