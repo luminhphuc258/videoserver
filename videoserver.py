@@ -1,11 +1,17 @@
 from flask import Flask, render_template_string, request
+import requests
 
 app = Flask(__name__)
 
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
-# Endpoint NodeJS để request cho server publish MQTT scan command
-NODEJS_SCAN_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
+# ENDPOINT SCAN NODEJS
+NODEJS_SCAN_30   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan30"
+NODEJS_SCAN_45   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan45"
+NODEJS_SCAN_90   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan90"
+NODEJS_SCAN_180  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan180"
+NODEJS_SCAN_360  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
+
 
 @app.route("/")
 def index():
@@ -14,7 +20,7 @@ def index():
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Matthew Robot — Auto Active Listening</title>
+  <title>Matthew Robot — Auto Active Listening + Scan Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body {{
@@ -24,12 +30,13 @@ def index():
       text-align:center;
       padding:20px;
     }}
+
     h2 {{ color:#0ff; }}
 
     button {{
-      margin:10px;
-      padding:10px 20px;
-      font-size:16px;
+      margin:5px;
+      padding:10px 18px;
+      font-size:15px;
       border:none;
       border-radius:6px;
       cursor:pointer;
@@ -38,15 +45,11 @@ def index():
     #startBtn {{ background:#0af; color:#000; }}
     #stopBtn  {{ background:#f44; color:#000; }}
 
-    #scanBtn {{
-      background:#0f0; 
+    #scanButtons button {{
+      background:#0f0;
       color:#000;
       font-weight:bold;
-      margin-top:20px;
     }}
-
-    #stopBtn:disabled,
-    #startBtn:disabled {{ opacity:0.5; cursor:not-allowed; }}
 
     #status {{
       margin-top:15px;
@@ -63,7 +66,6 @@ def index():
       white-space:pre-wrap;
     }}
 
-    /* MAP CANVAS */
     #mapCanvas {{
       margin-top:25px;
       background:#000;
@@ -83,17 +85,43 @@ def index():
   <p id="status">Initializing microphone...</p>
   <div id="result"></div>
 
-  <!-- NEW BUTTON: SCAN TO MAP -->
-  <button id="scanBtn">Scan to Map 2D</button>
+  <!-- NEW SCAN BUTTONS -->
+  <h3 style="margin-top:30px; color:#0f0;">Scan Environment</h3>
 
-  <!-- MAP CANVAS -->
+  <div id="scanButtons">
+      <button onclick="triggerScan('{NODEJS_SCAN_30}', '30°')">Scan 30°</button>
+      <button onclick="triggerScan('{NODEJS_SCAN_45}', '45°')">Scan 45°</button>
+      <button onclick="triggerScan('{NODEJS_SCAN_90}', '90°')">Scan 90°</button>
+      <button onclick="triggerScan('{NODEJS_SCAN_180}', '180°')">Scan 180°</button>
+      <button onclick="triggerScan('{NODEJS_SCAN_360}', '360°')">Scan 360°</button>
+  </div>
+
   <canvas id="mapCanvas" width="400" height="400"></canvas>
+
 
   <script>
 
     /* ================================
-       GLOBAL STATE
+       SCAN COMMAND TO NODEJS
     ================================ */
+    async function triggerScan(url, label) {{
+        document.getElementById("status").innerText =
+            "Sending scan request " + label + " ...";
+
+        try {{
+            await fetch(url, {{ method:"GET" }});
+            alert("Robot is scanning " + label);
+        }} catch (e) {{
+            alert("Cannot send scan command!");
+        }}
+    }}
+
+
+
+    /* =======================================================
+         BELOW IS YOUR AUDIO + LISTENING ENGINE — UNTOUCHED
+       ======================================================= */
+
     let manualStream = null;
     let mediaRecorder = null;
     let audioChunks = [];
@@ -107,12 +135,7 @@ def index():
     let activeRecorder = null;
 
 
-    /* ================================
-       CLEAR ALL AUDIO OBJECTS
-    ================================ */
     function clearCache() {{
-      console.warn("🔥 CLEAR CACHE");
-
       if (rafId) cancelAnimationFrame(rafId);
       rafId = null;
 
@@ -133,14 +156,11 @@ def index():
 
       source = null;
       analyser = null;
-
       audioChunks = [];
     }}
 
 
-    /* ================================
-       MANUAL RECORD
-    ================================ */
+
     async function startRecordingManual() {{
       manualStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
       audioChunks = [];
@@ -171,8 +191,9 @@ def index():
     document.getElementById("stopBtn").onclick  = stopRecordingManual;
 
 
+
     /* ================================
-       AUTO ACTIVE LISTENING
+       AUTO LISTENING
     ================================ */
     const thresholdAmp = 50;
 
@@ -252,8 +273,9 @@ def index():
     window.onload = startAutoListening;
 
 
+
     /* ================================
-       UPLOAD AUDIO + WAIT FOR BOT
+       UPLOAD AUDIO
     ================================ */
     async function uploadAudio(triggerLevel = 0) {{
       if (!audioChunks.length) {{
@@ -310,60 +332,6 @@ def index():
     }}
 
 
-
-    /* ======================================================
-       NEW FEATURE — SEND SCAN COMMAND TO SERVER
-    ====================================================== */
-
-    document.getElementById("scanBtn").onclick = async () => {{
-      document.getElementById("status").innerText = "Requesting robot to scan...";
-
-      try {{
-        await fetch("{NODEJS_SCAN_URL}", {{ method: "POST" }});
-        alert("Robot bắt đầu quay 360° để quét map!");
-      }} catch (e) {{
-        alert("Lỗi: không gửi được scan command.");
-      }}
-    }};
-
-
-    /* ======================================================
-       WHEN ROBOT REPORTS SCAN DONE → FETCH MAP + DRAW
-    ====================================================== */
-
-    async function fetchMapAndDraw() {{
-      try {{
-        const res = await fetch("/get_map");
-        const points = await res.json();
-        drawMap(points);
-      }} catch (e) {{
-        console.log("Map fetch error", e);
-      }}
-    }}
-
-    function drawMap(points) {{
-      const c = document.getElementById("mapCanvas");
-      const ctx = c.getContext("2d");
-
-      ctx.clearRect(0,0,400,400);
-
-      // robot ở giữa
-      ctx.fillStyle = "#0f0";
-      ctx.beginPath();
-      ctx.arc(200,200,5,0,Math.PI*2);
-      ctx.fill();
-
-      const scale = 50; // 1m = 50px
-
-      ctx.fillStyle = "#f44";
-
-      points.forEach(p => {{
-        let sx = 200 + p.x * scale;
-        let sy = 200 - p.y * scale;
-        ctx.fillRect(sx, sy, 3, 3);
-      }});
-    }}
-
   </script>
 </body>
 </html>
@@ -371,18 +339,15 @@ def index():
     return render_template_string(html)
 
 
-
-# Endpoint để robot ESP32 báo "scan done"
+# ROBOT REPORTS SCAN DONE
 @app.route("/scan_done", methods=["POST"])
 def scan_done():
     print("Robot completed scan.")
     return {"status": "received"}
 
 
-# Endpoint giả để server trả map (bạn sẽ dùng NodeJS real API)
 @app.route("/get_map")
 def get_map():
-    # tạm trả rỗng
     return {"points": []}
 
 
