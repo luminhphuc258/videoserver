@@ -1,8 +1,11 @@
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
+
+# Endpoint NodeJS để request cho server publish MQTT scan command
+NODEJS_SCAN_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
 
 @app.route("/")
 def index():
@@ -34,6 +37,14 @@ def index():
 
     #startBtn {{ background:#0af; color:#000; }}
     #stopBtn  {{ background:#f44; color:#000; }}
+
+    #scanBtn {{
+      background:#0f0; 
+      color:#000;
+      font-weight:bold;
+      margin-top:20px;
+    }}
+
     #stopBtn:disabled,
     #startBtn:disabled {{ opacity:0.5; cursor:not-allowed; }}
 
@@ -51,6 +62,13 @@ def index():
       text-align:left;
       white-space:pre-wrap;
     }}
+
+    /* MAP CANVAS */
+    #mapCanvas {{
+      margin-top:25px;
+      background:#000;
+      border:1px solid #555;
+    }}
   </style>
 </head>
 
@@ -65,7 +83,14 @@ def index():
   <p id="status">Initializing microphone...</p>
   <div id="result"></div>
 
+  <!-- NEW BUTTON: SCAN TO MAP -->
+  <button id="scanBtn">Scan to Map 2D</button>
+
+  <!-- MAP CANVAS -->
+  <canvas id="mapCanvas" width="400" height="400"></canvas>
+
   <script>
+
     /* ================================
        GLOBAL STATE
     ================================ */
@@ -80,6 +105,7 @@ def index():
     let analyser = null;
     let rafId = null;
     let activeRecorder = null;
+
 
     /* ================================
        CLEAR ALL AUDIO OBJECTS
@@ -110,6 +136,7 @@ def index():
 
       audioChunks = [];
     }}
+
 
     /* ================================
        MANUAL RECORD
@@ -255,25 +282,18 @@ def index():
           "Label: " + (json.label || "") + "\\n" +
           "Audio URL: " + (audioUrl || "");
 
-        /* =============================
-           STOP LISTENING NGAY LẬP TỨC
-        ============================= */
         clearCache();
         document.getElementById("status").innerText = "Robot speaking...";
 
-        /* =================================
-           PLAY AUDIO + WAIT UNTIL FINISHED
-        ================================= */
         if (audioUrl) {{
           const audio = new Audio(audioUrl);
 
           audio.onloadedmetadata = () => {{
             const durationMs = audio.duration * 1000;
-            console.log("Audio duration =", durationMs, "ms");
 
             audio.play();
 
-            const waitTime = durationMs + 2000; // prevent echo trigger
+            const waitTime = durationMs + 2000;
 
             setTimeout(() => {{
               document.getElementById("status").innerText = "Restarting auto listening...";
@@ -289,11 +309,81 @@ def index():
       }}
     }}
 
+
+
+    /* ======================================================
+       NEW FEATURE — SEND SCAN COMMAND TO SERVER
+    ====================================================== */
+
+    document.getElementById("scanBtn").onclick = async () => {{
+      document.getElementById("status").innerText = "Requesting robot to scan...";
+
+      try {{
+        await fetch("{NODEJS_SCAN_URL}", {{ method: "POST" }});
+        alert("Robot bắt đầu quay 360° để quét map!");
+      }} catch (e) {{
+        alert("Lỗi: không gửi được scan command.");
+      }}
+    }};
+
+
+    /* ======================================================
+       WHEN ROBOT REPORTS SCAN DONE → FETCH MAP + DRAW
+    ====================================================== */
+
+    async function fetchMapAndDraw() {{
+      try {{
+        const res = await fetch("/get_map");
+        const points = await res.json();
+        drawMap(points);
+      }} catch (e) {{
+        console.log("Map fetch error", e);
+      }}
+    }}
+
+    function drawMap(points) {{
+      const c = document.getElementById("mapCanvas");
+      const ctx = c.getContext("2d");
+
+      ctx.clearRect(0,0,400,400);
+
+      // robot ở giữa
+      ctx.fillStyle = "#0f0";
+      ctx.beginPath();
+      ctx.arc(200,200,5,0,Math.PI*2);
+      ctx.fill();
+
+      const scale = 50; // 1m = 50px
+
+      ctx.fillStyle = "#f44";
+
+      points.forEach(p => {{
+        let sx = 200 + p.x * scale;
+        let sy = 200 - p.y * scale;
+        ctx.fillRect(sx, sy, 3, 3);
+      }});
+    }}
+
   </script>
 </body>
 </html>
     """
     return render_template_string(html)
+
+
+
+# Endpoint để robot ESP32 báo "scan done"
+@app.route("/scan_done", methods=["POST"])
+def scan_done():
+    print("Robot completed scan.")
+    return {"status": "received"}
+
+
+# Endpoint giả để server trả map (bạn sẽ dùng NodeJS real API)
+@app.route("/get_map")
+def get_map():
+    # tạm trả rỗng
+    return {"points": []}
 
 
 if __name__ == "__main__":
