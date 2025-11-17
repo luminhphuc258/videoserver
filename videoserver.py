@@ -57,7 +57,7 @@ def index():
 <body>
   <h2>Matthew Robot — Auto Active Listening</h2>
 
-  <!-- SPEAK/STOP thủ công (giữ nguyên) -->
+  <!-- SPEAK/STOP thủ công -->
   <div>
     <button id="startBtn">Speak</button>
     <button id="stopBtn" disabled>Stop</button>
@@ -67,34 +67,75 @@ def index():
   <div id="result"></div>
 
   <script>
+    /* ================================
+       GLOBAL STATE
+    ================================ */
     let manualStream = null;
     let mediaRecorder = null;
     let audioChunks = [];
+    let botCallCount = 0;
 
-    //==============================
-    // Ghi thủ công (Speak/Stop)
-    //==============================
-    async function startRecordingManual() {{
-      try {{
-        manualStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
-        audioChunks = [];
-        mediaRecorder = new MediaRecorder(manualStream);
+    /* các biến để tránh leak */
+    let listenStream = null;
+    let audioCtx = null;
+    let source = null;
+    let analyser = null;
+    let rafId = null;
+    let activeRecorder = null;
 
-        mediaRecorder.ondataavailable = e => {{
-          if (e.data.size > 0) audioChunks.push(e.data);
-        }};
-        mediaRecorder.onstop = () => {{
-          manualStream.getTracks().forEach(t => t.stop());
-          uploadAudio();
-        }};
+    /* ================================
+       CLEAR CACHE AFTER 3 CALLS
+    ================================ */
+    function clearCache() {{
+      console.warn("🔥 CLEAR CACHE TRIGGERED");
 
-        mediaRecorder.start();
-        document.getElementById("status").innerText = "Recording (manual)...";
-        document.getElementById("startBtn").disabled = true;
-        document.getElementById("stopBtn").disabled = false;
-      }} catch(e) {{
-        alert("Mic error: " + e);
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = null;
+
+      if (activeRecorder && activeRecorder.state !== "inactive") {{
+        try {{ activeRecorder.stop(); }} catch(e){{}}
       }}
+      activeRecorder = null;
+
+      if (listenStream) {{
+        listenStream.getTracks().forEach(t => t.stop());
+      }}
+      listenStream = null;
+
+      if (audioCtx) {{
+        audioCtx.close();
+      }}
+      audioCtx = null;
+
+      source = null;
+      analyser = null;
+
+      audioChunks = [];
+      document.getElementById("status").innerText = "Cache cleared. Restarting...";
+    }}
+
+    /* ================================
+       MANUAL RECORD
+    ================================ */
+    async function startRecordingManual() {{
+      manualStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
+      audioChunks = [];
+
+      mediaRecorder = new MediaRecorder(manualStream);
+
+      mediaRecorder.ondataavailable = e => {{
+        if (e.data.size > 0) audioChunks.push(e.data);
+      }};
+
+      mediaRecorder.onstop = () => {{
+        manualStream.getTracks().forEach(t => t.stop());
+        uploadAudio();
+      }};
+
+      mediaRecorder.start();
+      document.getElementById("status").innerText = "Recording (manual)...";
+      document.getElementById("startBtn").disabled = true;
+      document.getElementById("stopBtn").disabled = false;
     }}
 
     function stopRecordingManual() {{
@@ -110,39 +151,35 @@ def index():
     document.getElementById("stopBtn").onclick  = stopRecordingManual;
 
 
-    //==============================
-    //  AUTO ACTIVE LISTENING
-    //==============================
-    const thresholdAmp = 92;   // cố định 40
-    let listenStream = null;
-    let listening = false;
-    let activeRecorder = null;
-    let lastTriggeredLevel = 0;
-
-    window.onload = () => {{
-      startAutoListening();
-    }};
+    /* ================================
+       AUTO ACTIVE LISTENING
+    ================================ */
+    const thresholdAmp = 92;
 
     async function startAutoListening() {{
+      clearCache();   // reset mọi thứ trước khi bắt đầu lại
+
       try {{
-        listenStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});    
+        listenStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
       }} catch(e) {{
-        document.getElementById("status").innerText = "Không lấy được quyền microphone.";
+        document.getElementById("status").innerText = "Cannot access microphone";
         return;
       }}
 
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const audioCtx = new AudioCtx();
-      const source = audioCtx.createMediaStreamSource(listenStream);
-      const analyser = audioCtx.createAnalyser();
+      audioCtx = new AudioCtx();
+
+      source = audioCtx.createMediaStreamSource(listenStream);
+      analyser = audioCtx.createAnalyser();
       analyser.fftSize = 1024;
 
       source.connect(analyser);
+
       const data = new Uint8Array(analyser.fftSize);
 
-      listening = true;
       let triggered = false;
       let recordStart = 0;
+      let lastTriggeredLevel = 0;
 
       function startAutoRecord() {{
         if (triggered) return;
@@ -154,62 +191,54 @@ def index():
         activeRecorder.ondataavailable = e => {{
           if (e.data.size > 0) audioChunks.push(e.data);
         }};
+
         activeRecorder.onstop = () => {{
-          listenStream.getTracks().forEach(t => t.stop());
           uploadAudio(lastTriggeredLevel);
         }};
 
         activeRecorder.start();
         recordStart = Date.now();
-
-        document.getElementById("status").innerText =
-          "Triggered! Recording up to 5s... (level=" + lastTriggeredLevel + ")";
       }}
 
-      function stopAutoRecord() {{
-        listening = false;
-        if (activeRecorder && activeRecorder.state !== "inactive") {{
-          activeRecorder.stop();
-        }}
-      }}
-
-      async function loop() {{
-        if (!listening) return;
-
+      function loop() {{
         analyser.getByteTimeDomainData(data);
-
         let maxAmp = 0;
+
         for (let i=0; i<data.length; i++) {{
-          const amp = Math.abs(data[i] - 128);
+          let amp = Math.abs(data[i] - 128);
           if (amp > maxAmp) maxAmp = amp;
         }}
 
-        // Hiển thị realtime level
-        document.getElementById("status").innerText =
-          "Listening... Level=" + maxAmp + " / 128 (threshold=40)";
+        document.getElementById("status").innerText = 
+          "Listening... Level=" + maxAmp + " (threshold=40)";
 
         if (!triggered && maxAmp >= thresholdAmp) {{
-          lastTriggeredLevel = maxAmp;  // ghi level tại thời điểm kích hoạt
+          lastTriggeredLevel = maxAmp;
           startAutoRecord();
         }}
 
-        if (triggered && (Date.now() - recordStart) >= 5000) {{
-          stopAutoRecord();
+        if (triggered && (Date.now() - recordStart >= 5000)) {{
+          if (activeRecorder && activeRecorder.state !== "inactive") {{
+            activeRecorder.stop();
+          }}
           return;
         }}
 
-        requestAnimationFrame(loop);
+        rafId = requestAnimationFrame(loop);
       }}
 
       loop();
     }}
 
-    //==============================
-    // UPLOAD AUDIO
-    //==============================
+    window.onload = startAutoListening;
+
+
+    /* ================================
+       UPLOAD AUDIO
+    ================================ */
     async function uploadAudio(triggerLevel=0) {{
       if (!audioChunks.length) {{
-        document.getElementById("status").innerText = "Không có dữ liệu ghi.";
+        document.getElementById("status").innerText = "No audio data.";
         return;
       }}
 
@@ -217,8 +246,7 @@ def index():
       const form = new FormData();
       form.append("audio", blob, "voice.webm");
 
-      document.getElementById("status").innerText =
-        "Uploading... (triggerLevel=" + triggerLevel + ")";
+      document.getElementById("status").innerText = "Uploading...";
 
       try {{
         const res = await fetch("{NODEJS_UPLOAD_URL}", {{
@@ -233,9 +261,16 @@ def index():
           "Label: " + (json.label || "") + "\\n" +
           "Audio URL: " + (json.audio_url || "");
 
-        document.getElementById("status").innerText = "Done. Auto Listening restarting...";
-        
-        // restart listening
+        botCallCount++;
+
+        // 🔥 CLEAR CACHE EVERY 3 CALLS
+        if (botCallCount >= 3) {{
+          botCallCount = 0;
+          clearCache();
+          setTimeout(startAutoListening, 1000);
+          return;
+        }}
+
         setTimeout(startAutoListening, 800);
 
       }} catch(err) {{
@@ -248,6 +283,7 @@ def index():
 </html>
     """
     return render_template_string(html)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, threaded=True)
