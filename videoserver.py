@@ -2,7 +2,6 @@ from flask import Flask, render_template_string
 
 app = Flask(__name__)
 
-# URL NodeJS server (để upload audio)
 NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
 
 @app.route("/")
@@ -35,14 +34,7 @@ def index():
 
         #startBtn {{ background:#0af; color:#000; }}
         #stopBtn  {{ background:#f44; color:#000; }}
-        #activeBtn {{ background:#0f0; color:#000; }}
-
-        #stopBtn:disabled,
-        #startBtn:disabled,
-        #activeBtn:disabled {{
-          opacity:0.5;
-          cursor:not-allowed;
-        }}
+        #updateBtn {{ background:#0f0; color:#000; }}
 
         #thresholdBox {{
           margin-top:10px;
@@ -81,11 +73,12 @@ def index():
 
       <!-- Active Listening -->
       <h3 style="color:#0f0; margin-top:30px;">Active Listening Mode</h3>
-      <button id="activeBtn">Activate Listening</button>  
 
-      <br>
       <input id="thresholdBox" type="number" min="50" max="3000"
              placeholder="Threshold (vd: 300)" />
+
+      <br>
+      <button id="updateBtn">Update Threshold & Start</button>
 
       <p id="status">Ready.</p>
       <div id="result"></div>
@@ -95,16 +88,12 @@ def index():
         let audioChunks = [];
         let listening = false;
         let audioStream = null;
+        let thresholdValue = 300;  // default
 
         // =============================
         //  GHI THỦ CÔNG: START / STOP
         // =============================
         async function startRecording() {{
-          if (!navigator.mediaDevices) {{
-            alert("Browser không hỗ trợ mic.");
-            return;
-          }}
-
           try {{
             const stream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
             audioChunks = [];
@@ -134,19 +123,29 @@ def index():
           }}
         }}
 
+        // ======================================
+        //       UPDATE THRESHOLD & START
+        // ======================================
+        document.getElementById("updateBtn").onclick = function() {{
+          const newVal = parseInt(document.getElementById("thresholdBox").value);
+          if (!newVal || newVal < 20) {{
+            alert("Threshold không hợp lệ!");
+            return;
+          }}
+
+          thresholdValue = newVal;
+          document.getElementById("status").innerText =
+            "Threshold updated: " + thresholdValue + " → Listening...";
+
+          startActiveListening();
+        }}
+
         // =============================
-        //   ACTIVE LISTENING MODE
+        //      ACTIVE LISTENING LOOP
         // =============================
-        document.getElementById("activeBtn").onclick = async function() {{
-          if (listening) return; // tránh double click
+        async function startActiveListening() {{
           listening = true;
 
-          const threshold = parseInt(document.getElementById("thresholdBox").value || "300");
-
-          document.getElementById("status").innerText = 
-              "Active Listening ON (threshold = " + threshold + ")";
-
-          // Lấy microphone
           audioStream = await navigator.mediaDevices.getUserMedia({{
             audio: {{
               echoCancellation:false,
@@ -159,39 +158,40 @@ def index():
           const source = audioCtx.createMediaStreamSource(audioStream);
           const analyser = audioCtx.createAnalyser();
           analyser.fftSize = 2048;
+          let data = new Uint8Array(analyser.fftSize);
+          let triggered = false;
+          let recordStart = 0;
 
           source.connect(analyser);
 
-          let dataArray = new Uint8Array(analyser.fftSize);
-          let triggered = false;
-          let recordStartTime = 0;
-
-          function loopDetect() {{
+          function detectLoop() {{
             if (!listening) return;
 
-            analyser.getByteTimeDomainData(dataArray);
+            analyser.getByteTimeDomainData(data);
 
             let maxAmp = 0;
-            for (let i=0; i<dataArray.length; i++) {{
-              let amp = Math.abs(dataArray[i] - 128);
+            for (let i = 0; i < data.length; i++) {{
+              let amp = Math.abs(data[i] - 128);
               if (amp > maxAmp) maxAmp = amp;
             }}
 
-            if (!triggered && maxAmp >= threshold) {{
+            if (!triggered && maxAmp >= thresholdValue) {{
               triggered = true;
-              document.getElementById("status").innerText = "Sound detected → start recording (max 5s)";
-              startActiveRecorder();
+              document.getElementById("status").innerText = 
+                "Sound detected! Recording for up to 5 seconds...";
+
+              startAutoRecord();
             }}
 
-            if (triggered && (Date.now() - recordStartTime) >= 5000) {{
-              stopActiveRecorder();
+            if (triggered && Date.now() - recordStart >= 5000) {{
+              stopAutoRecord();
               return;
             }}
 
-            requestAnimationFrame(loopDetect);
+            requestAnimationFrame(detectLoop);
           }}
 
-          function startActiveRecorder() {{
+          function startAutoRecord() {{
             audioChunks = [];
             mediaRecorder = new MediaRecorder(audioStream);
 
@@ -202,20 +202,20 @@ def index():
             mediaRecorder.onstop = uploadAudio;
 
             mediaRecorder.start();
-            recordStartTime = Date.now();
+            recordStart = Date.now();
           }}
 
-          function stopActiveRecorder() {{
+          function stopAutoRecord() {{
             listening = false;
             mediaRecorder.stop();
             audioStream.getTracks().forEach(t => t.stop());
           }}
 
-          loopDetect();
+          detectLoop();
         }}
 
         // ====================================
-        //           UPLOAD AUDIO
+        //            UPLOAD AUDIO
         // ====================================
         async function uploadAudio() {{
           const blob = new Blob(audioChunks);
@@ -227,22 +227,19 @@ def index():
 
           try {{
             const res = await fetch("{NODEJS_UPLOAD_URL}", {{
-              method:"POST",
-              body:form
+              method: "POST",
+              body: form
             }});
-
             const json = await res.json();
 
-            const txt = 
+            const txt =
               "Transcript: " + (json.transcript || "") + "\\n" +
-              "Label: "       + (json.label || "") + "\\n" +
-              "Audio URL: "   + (json.audio_url || "");
+              "Label: " + (json.label || "") + "\\n" +
+              "Audio URL: " + (json.audio_url || "");
 
             document.getElementById("result").innerText = txt;
-            document.getElementById("status").innerText = "Done";
-
-          }} catch (e) {{
-            console.log(e);
+            document.getElementById("status").innerText = "Done.";
+          }} catch(e) {{
             document.getElementById("status").innerText = "Upload error: " + e;
           }}
         }}
@@ -250,7 +247,6 @@ def index():
         // Gán nút
         document.getElementById("startBtn").onclick = startRecording;
         document.getElementById("stopBtn").onclick = stopRecording;
-
       </script>
     </body>
     </html>
