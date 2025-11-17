@@ -39,7 +39,7 @@ def index():
         #thresholdBox {{
           margin-top:10px;
           padding:8px;
-          width:200px;
+          width:220px;
           border-radius:6px;
           border:none;
           font-size:15px;
@@ -65,7 +65,7 @@ def index():
     <body>
       <h2>Matthew Robot — Voice Only</h2>
 
-      <!-- Nút Speak/Stop cũ -->
+      <!-- Nút Speak/Stop thủ công -->
       <div>
         <button id="startBtn">Speak</button>
         <button id="stopBtn" disabled>Stop</button>
@@ -74,11 +74,11 @@ def index():
       <!-- Active Listening -->
       <h3 style="color:#0f0; margin-top:30px;">Active Listening Mode</h3>
 
-      <input id="thresholdBox" type="number" min="1" max="100"
-             placeholder="Threshold (gợi ý: 20–30)" />
+      <input id="thresholdBox" type="number" min="5" max="120"
+             placeholder="Threshold biên độ (gợi ý: 20–40)" />
 
       <br>
-      <button id="updateBtn">Update Threshold & Start</button>
+      <button id="updateBtn">Update Threshold & Start Listening</button>
 
       <p id="status">Ready.</p>
       <div id="result"></div>
@@ -86,31 +86,32 @@ def index():
       <script>
         let mediaRecorder = null;
         let audioChunks = [];
-        let listening = false;
-        let audioStream = null;
-        let thresholdValue = 25;  // mặc định % (0–100)
-        let detectTimer = null;
+        let manualStream = null;
 
-        // =============================
-        //  GHI THỦ CÔNG: START / STOP
-        // =============================
-        async function startRecording() {{
+        // ========== GHI THỦ CÔNG: SPEAK / STOP ==========
+        async function startRecordingManual() {{
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
             alert("Trình duyệt không hỗ trợ micro.");
             return;
           }}
           try {{
-            const stream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
+            manualStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
             audioChunks = [];
-            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder = new MediaRecorder(manualStream);
 
             mediaRecorder.ondataavailable = e => {{
               if (e.data.size > 0) audioChunks.push(e.data);
             }};
-            mediaRecorder.onstop = () => uploadAudio();
+            mediaRecorder.onstop = () => {{
+              if (manualStream) {{
+                manualStream.getTracks().forEach(t => t.stop());
+                manualStream = null;
+              }}
+              uploadAudio();
+            }};
 
             mediaRecorder.start();
-            document.getElementById("status").innerText = "Recording...";
+            document.getElementById("status").innerText = "Recording (manual)...";
             document.getElementById("startBtn").disabled = true;
             document.getElementById("stopBtn").disabled = false;
           }} catch(e) {{
@@ -119,49 +120,45 @@ def index():
           }}
         }}
 
-        function stopRecording() {{
+        function stopRecordingManual() {{
           if (mediaRecorder && mediaRecorder.state !== "inactive") {{
             mediaRecorder.stop();
-            document.getElementById("status").innerText = "Processing...";
+            document.getElementById("status").innerText = "Processing (manual)...";
             document.getElementById("startBtn").disabled = false;
             document.getElementById("stopBtn").disabled = true;
           }}
         }}
 
-        document.getElementById("startBtn").onclick = startRecording;
-        document.getElementById("stopBtn").onclick = stopRecording;
+        document.getElementById("startBtn").onclick = startRecordingManual;
+        document.getElementById("stopBtn").onclick  = stopRecordingManual;
 
-        // ======================================
-        //   UPDATE THRESHOLD & START LISTENING
-        // ======================================
+        // ========== ACTIVE LISTENING ==========
+        let listening = false;
+        let listenStream = null;
+        let thresholdAmp = 30;   // raw amp 0–128
+        let activeRecorder = null;
+
         document.getElementById("updateBtn").onclick = async function() {{
           const val = parseInt(document.getElementById("thresholdBox").value);
-          if (isNaN(val) || val < 1 || val > 100) {{
-            alert("Nhập threshold từ 1–100 (gợi ý 20–30).");
+          if (isNaN(val) || val < 5 || val > 120) {{
+            alert("Nhập threshold từ 5–120 (gợi ý 20–40).");
             return;
           }}
-          thresholdValue = val;
-          document.getElementById("status").innerText =
-            "Threshold = " + thresholdValue + "%. Đang bật Active Listening...";
+          thresholdAmp = val;
 
-          // nếu đang nghe cũ thì stop lại
+          // Nếu đang nghe cũ thì stop
+          if (listenStream) {{
+            listenStream.getTracks().forEach(t => t.stop());
+            listenStream = null;
+          }}
           listening = false;
-          if (detectTimer) {{
-            clearInterval(detectTimer);
-            detectTimer = null;
-          }}
-          if (audioStream) {{
-            audioStream.getTracks().forEach(t => t.stop());
-            audioStream = null;
-          }}
 
-          // bắt đầu session mới
+          document.getElementById("status").innerText =
+            "Threshold = " + thresholdAmp + ". Đang bật Active Listening...";
+
           await startActiveListening();
         }};
 
-        // =============================
-        //      ACTIVE LISTENING LOOP
-        // =============================
         async function startActiveListening() {{
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
             alert("Trình duyệt không hỗ trợ micro.");
@@ -169,12 +166,7 @@ def index():
           }}
 
           try {{
-            audioStream = await navigator.mediaDevices.getUserMedia({{
-              audio: {{
-                echoCancellation:false,
-                noiseSuppression:false
-              }}
-            }});
+            listenStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
           }} catch(e) {{
             console.error(e);
             document.getElementById("status").innerText =
@@ -182,56 +174,58 @@ def index():
             return;
           }}
 
-          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          const source = audioCtx.createMediaStreamSource(audioStream);
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          const audioCtx = new AudioCtx();
+          const source = audioCtx.createMediaStreamSource(listenStream);
           const analyser = audioCtx.createAnalyser();
           analyser.fftSize = 1024;
 
           source.connect(analyser);
 
-          let data = new Uint8Array(analyser.fftSize);
+          const data = new Uint8Array(analyser.fftSize);
           listening = true;
           let triggered = false;
-          let recordStartTime = 0;
+          let recordStart = 0;
 
-          // Hàm bắt đầu ghi tối đa 5s
           function startAutoRecord() {{
             if (triggered) return;
             triggered = true;
-            audioChunks = [];
 
-            mediaRecorder = new MediaRecorder(audioStream);
-            mediaRecorder.ondataavailable = e => {{
+            audioChunks = [];
+            activeRecorder = new MediaRecorder(listenStream);
+
+            activeRecorder.ondataavailable = e => {{
               if (e.data.size > 0) audioChunks.push(e.data);
             }};
-            mediaRecorder.onstop = () => {{
+            activeRecorder.onstop = () => {{
+              // dừng stream
+              if (listenStream) {{
+                listenStream.getTracks().forEach(t => t.stop());
+                listenStream = null;
+              }}
               uploadAudio();
             }};
 
-            mediaRecorder.start();
-            recordStartTime = Date.now();
+            activeRecorder.start();
+            recordStart = Date.now();
             document.getElementById("status").innerText =
               "Sound detected! Đang ghi (tối đa 5s)...";
           }}
 
-          // Hàm dừng ghi + tắt listening
           function stopAutoRecord() {{
             listening = false;
-            if (detectTimer) {{
-              clearInterval(detectTimer);
-              detectTimer = null;
-            }}
-            if (mediaRecorder && mediaRecorder.state !== "inactive") {{
-              mediaRecorder.stop();
-            }}
-            if (audioStream) {{
-              audioStream.getTracks().forEach(t => t.stop());
-              audioStream = null;
+            if (activeRecorder && activeRecorder.state !== "inactive") {{
+              activeRecorder.stop();
+            }} else {{
+              // không ghi được gì → dừng stream thôi
+              if (listenStream) {{
+                listenStream.getTracks().forEach(t => t.stop());
+                listenStream = null;
+              }}
             }}
           }}
 
-          // Loop kiểm tra biên độ
-          detectTimer = setInterval(() => {{
+          async function loop() {{
             if (!listening) return;
 
             analyser.getByteTimeDomainData(data);
@@ -241,25 +235,26 @@ def index():
               if (v > maxAmp) maxAmp = v;
             }}
 
-            // maxAmp ~ 0–128 -> convert sang %
-            const levelPercent = (maxAmp / 128) * 100;
+            // hiển thị biên độ hiện tại để bạn thấy nó có đo
+            document.getElementById("status").innerText =
+              "Active Listening - Level: " + maxAmp + " / 128 | Threshold: " + thresholdAmp;
 
-            // log ra console nếu muốn debug
-            // console.log("Level:", levelPercent.toFixed(1), "%");
-
-            if (!triggered && levelPercent >= thresholdValue) {{
+            if (!triggered && maxAmp >= thresholdAmp) {{
               startAutoRecord();
             }}
 
-            if (triggered && (Date.now() - recordStartTime) >= 5000) {{
+            if (triggered && (Date.now() - recordStart) >= 5000) {{
               stopAutoRecord();
+              return;
             }}
-          }}, 80);  // check ~12.5 lần/giây
+
+            requestAnimationFrame(loop);
+          }}
+
+          loop();
         }}
 
-        // ====================================
-        //            UPLOAD AUDIO
-        // ====================================
+        // ========== UPLOAD AUDIO ==========
         async function uploadAudio() {{
           if (!audioChunks.length) {{
             document.getElementById("status").innerText =
