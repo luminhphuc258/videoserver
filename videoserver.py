@@ -154,7 +154,7 @@ def index():
     /* ================================
        AUTO ACTIVE LISTENING
     ================================ */
-    const thresholdAmp = 92;
+    const thresholdAmp = 25;
 
     async function startAutoListening() {{
       clearCache();   // reset mọi thứ trước khi bắt đầu lại
@@ -217,7 +217,7 @@ def index():
           startAutoRecord();
         }}
 
-        if (triggered && (Date.now() - recordStart >= 5000)) {{
+        if (triggered && (Date.now() - recordStart >= 2500)) {{
           if (activeRecorder && activeRecorder.state !== "inactive") {{
             activeRecorder.stop();
           }}
