@@ -1,13 +1,14 @@
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 import requests
+import math
 
 app = Flask(__name__)
 
 # ==========================================
-# GLOBAL SCAN STATUS + MAPPING DATA
+# GLOBAL SCAN STATUS + MAP DATA
 # ==========================================
 scanStatus = "idle"   # idle | scanning | done
-mapping_points = []   # sẽ chứa các point cảm biến gửi lên
+mapping_points = []   # lưu các điểm {angle_deg, distance_cm}
 
 
 # ==========================================
@@ -83,9 +84,9 @@ def index():
       min-height:70px;
       text-align:left;
       white-space:pre-wrap;
-      max-height:250px;
+      max-height:200px;
       overflow:auto;
-      font-size:13px;
+      font-size:12px;
     }}
 
     #mapCanvas {{
@@ -118,14 +119,13 @@ def index():
       <button onclick="triggerScan('{NODEJS_SCAN_360}', '360°')">Scan 360°</button>
   </div>
 
-  <!-- NÚT SHOW DATA -->
+  <!-- SHOW DATA + MAP -->
   <button id="showDataBtn">Show Data & Draw Map</button>
-
   <canvas id="mapCanvas" width="400" height="400"></canvas>
 
   <script>
     /* ================================
-       SEND SCAN COMMAND TO NODEJS
+       SCAN COMMAND TO NODEJS
     ================================ */
     async function triggerScan(url, label) {{
         document.getElementById("status").innerText =
@@ -140,84 +140,89 @@ def index():
         }}
     }}
 
-
     /* ================================
-       SHOW DATA + DRAW MAP 2D
+       SHOW DATA & DRAW MAP
     ================================ */
-    document.getElementById("showDataBtn").onclick = loadAndDrawMap;
+    document.getElementById("showDataBtn").onclick = async () => {{
+        try {{
+            const res = await fetch("/get_map");
+            const data = await res.json();
+            const points = data.points || [];
 
-    async function loadAndDrawMap() {{
-      document.getElementById("status").innerText = "Loading mapping data...";
-      try {{
-        const res = await fetch("/get_map");
-        const json = await res.json();
-        const points = json.points || [];
+            // show raw data
+            document.getElementById("result").innerText =
+                JSON.stringify(points, null, 2);
 
-        // Hiển thị raw data
-        document.getElementById("result").innerText =
-          "Mapping points (" + points.length + "):\\n" +
-          JSON.stringify(points, null, 2);
+            // draw map
+            drawMap(points);
 
-        // Vẽ map
-        drawMap(points);
-        document.getElementById("status").innerText = "Map updated from sensor data.";
-
-      }} catch (e) {{
-        document.getElementById("status").innerText = "Error loading map: " + e;
-      }}
-    }}
+        }} catch (e) {{
+            console.error(e);
+            alert("Cannot load map data");
+        }}
+    }};
 
     function drawMap(points) {{
-      const canvas = document.getElementById("mapCanvas");
-      const ctx = canvas.getContext("2d");
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
+      const c = document.getElementById("mapCanvas");
+      const ctx = c.getContext("2d");
 
-      // nền
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Clear canvas
+      ctx.clearRect(0, 0, c.width, c.height);
 
-      // robot ở giữa
+      // Robot at center
+      const cx = c.width / 2;
+      const cy = c.height / 2;
+
+      // Draw robot as green dot
       ctx.fillStyle = "#0f0";
       ctx.beginPath();
       ctx.arc(cx, cy, 5, 0, Math.PI * 2);
       ctx.fill();
 
-      // scale: 1m = 50px, nếu distanceCm
-      const SCALE_PER_M = 50;
+      if (!points.length) {{
+        // no data
+        ctx.fillStyle = "#fff";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("No points yet", cx - 40, cy);
+        return;
+      }}
 
-      ctx.fillStyle = "#f44";
-
+      // Find max distance to auto-scale (distance_cm)
+      let maxR = 0;
       points.forEach(p => {{
-        let x = 0;
-        let y = 0;
-
-        // Nếu server đã có x,y dạng mét
-        if (p.x !== undefined && p.y !== undefined) {{
-          x = p.x;       // mét
-          y = p.y;       // mét
-        }}
-        // Nếu chỉ có angle + distance cm → convert sang (x,y)
-        else if (p.angle !== undefined && p.distance !== undefined) {{
-          const angleRad = p.angle * Math.PI / 180.0;
-          const distM = p.distance / 100.0;  // cm → m
-          x = distM * Math.cos(angleRad);
-          y = distM * Math.sin(angleRad);
-        }} else {{
-          // không đủ data
-          return;
-        }}
-
-        const px = cx + x * SCALE_PER_M;
-        const py = cy - y * SCALE_PER_M;
-
-        ctx.fillRect(px - 1, py - 1, 3, 3);
+        const d = p.distance_cm || p.distance || 0;
+        if (d > maxR) maxR = d;
       }});
+      if (maxR < 1) maxR = 1;
+
+      // We want max distance to fit roughly in radius 160px
+      const maxRadiusPx = 160;
+      const scale = maxRadiusPx / maxR;  // px per cm
+
+      // Draw each obstacle point in red
+      ctx.fillStyle = "#f44";
+      points.forEach(p => {{
+        const angleDeg = p.angle_deg || p.angle || 0;
+        const distCm   = p.distance_cm || p.distance || 0;
+
+        const rad = angleDeg * Math.PI / 180.0;
+        const rPx = distCm * scale;
+
+        const x = cx + rPx * Math.cos(rad);
+        const y = cy - rPx * Math.sin(rad); // canvas y ngược trục toán
+
+        ctx.fillRect(x - 2, y - 2, 4, 4);
+      }});
+
+      // Optional: draw circle range
+      ctx.strokeStyle = "#444";
+      ctx.beginPath();
+      ctx.arc(cx, cy, maxRadiusPx, 0, Math.PI * 2);
+      ctx.stroke();
     }}
 
-
     /* ============================================
-       AUDIO ENGINE — GIỮ NGUYÊN
+       BELOW IS AUDIO ENGINE — KEEP SAME
     ============================================ */
 
     let manualStream = null;
@@ -254,7 +259,6 @@ def index():
       audioChunks = [];
     }}
 
-
     async function startRecordingManual() {{
       manualStream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
       audioChunks = [];
@@ -288,10 +292,6 @@ def index():
     document.getElementById("startBtn").onclick = startRecordingManual;
     document.getElementById("stopBtn").onclick  = stopRecordingManual;
 
-
-    /* ============================
-       AUTO LISTENING
-    ============================ */
     const thresholdAmp = 50;
 
     async function startAutoListening() {{
@@ -366,10 +366,6 @@ def index():
 
     window.onload = startAutoListening;
 
-
-    /* ============================
-       UPLOAD AUDIO
-    ============================ */
     async function uploadAudio(triggerLevel = 0) {{
       if (!audioChunks.length) {{
         document.getElementById("status").innerText = "No audio data.";
@@ -446,14 +442,41 @@ def scan_done():
 # ============================================================
 @app.route("/set_scanning")
 def set_scanning():
-    global scanStatus
+    global scanStatus, mapping_points
     scanStatus = "scanning"
-    print("⚡ Scan started → scanStatus = scanning")
+    mapping_points = []  # clear old map mỗi lần scan mới
+    print("⚡ Scan started → scanStatus = scanning (mapping_points cleared)")
     return {"status": "ok", "scanStatus": scanStatus}
 
 
 # ============================================================
-# MODULE CẢM BIẾN: GET SCAN STATUS
+# MODULE CẢM BIẾN GỬI DATA: /push_mapping
+# Body JSON: {{ "angle_deg":..., "distance_cm":... }}
+# ============================================================
+@app.route("/push_mapping", methods=["POST"])
+def push_mapping():
+    global mapping_points
+    try:
+        data = request.get_json(force=True) or {}
+        angle_deg = float(data.get("angle_deg", 0))
+        distance_cm = float(data.get("distance_cm", 0))
+
+        mapping_points.append({
+            "angle_deg": angle_deg,
+            "distance_cm": distance_cm
+        })
+
+        print(f"➕ Add point angle={angle_deg}°, dist={distance_cm}cm "
+              f"(total={len(mapping_points)})")
+
+        return jsonify({"status": "ok", "count": len(mapping_points)})
+    except Exception as e:
+        print("❌ push_mapping error:", e)
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+# ============================================================
+# MODULE CẢM BIẾN REQUEST: /get_scanningstatus
 # ============================================================
 @app.route("/get_scanningstatus")
 def get_scanningstatus():
@@ -461,38 +484,11 @@ def get_scanningstatus():
 
 
 # ============================================================
-# MODULE CẢM BIẾN: PUSH MAPPING DATA
-#  - Body có thể là:
-#    { "angle": 30, "distance": 120 }
-#  - hoặc:
-#    {{ "points": [ {{angle, distance}}, ... ] }}
-#  - hoặc có sẵn x,y
-# ============================================================
-@app.route("/push_mapping", methods=["POST"])
-def push_mapping():
-    global mapping_points
-    data = request.get_json(force=True, silent=True) or {}
-
-    # Nếu body có dạng {{ "points": [...] }}
-    if isinstance(data.get("points"), list):
-        for p in data["points"]:
-            if isinstance(p, dict):
-                mapping_points.append(p)
-    else:
-        # Body là 1 point đơn
-        if isinstance(data, dict):
-            mapping_points.append(data)
-
-    print(f"📍 Received mapping data, total points = {{len(mapping_points)}}")
-    return { "status": "ok", "total_points": len(mapping_points) }
-
-
-# ============================================================
-# GET MAP FOR FRONT-END
+# /get_map  → trả hết points cho front-end
 # ============================================================
 @app.route("/get_map")
 def get_map():
-    return {"points": mapping_points}
+    return jsonify({"points": mapping_points})
 
 
 # ============================================================
