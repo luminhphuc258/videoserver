@@ -39,7 +39,7 @@ def index():
         #thresholdBox {{
           margin-top:10px;
           padding:8px;
-          width:160px;
+          width:200px;
           border-radius:6px;
           border:none;
           font-size:15px;
@@ -65,7 +65,7 @@ def index():
     <body>
       <h2>Matthew Robot — Voice Only</h2>
 
-      <!-- Nút Speak/Stop -->
+      <!-- Nút Speak/Stop cũ -->
       <div>
         <button id="startBtn">Speak</button>
         <button id="stopBtn" disabled>Stop</button>
@@ -74,8 +74,8 @@ def index():
       <!-- Active Listening -->
       <h3 style="color:#0f0; margin-top:30px;">Active Listening Mode</h3>
 
-      <input id="thresholdBox" type="number" min="50" max="3000"
-             placeholder="Threshold (vd: 300)" />
+      <input id="thresholdBox" type="number" min="1" max="100"
+             placeholder="Threshold (gợi ý: 20–30)" />
 
       <br>
       <button id="updateBtn">Update Threshold & Start</button>
@@ -88,12 +88,17 @@ def index():
         let audioChunks = [];
         let listening = false;
         let audioStream = null;
-        let thresholdValue = 300;  // default
+        let thresholdValue = 25;  // mặc định % (0–100)
+        let detectTimer = null;
 
         // =============================
         //  GHI THỦ CÔNG: START / STOP
         // =============================
         async function startRecording() {{
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+            alert("Trình duyệt không hỗ trợ micro.");
+            return;
+          }}
           try {{
             const stream = await navigator.mediaDevices.getUserMedia({{ audio:true }});
             audioChunks = [];
@@ -102,7 +107,6 @@ def index():
             mediaRecorder.ondataavailable = e => {{
               if (e.data.size > 0) audioChunks.push(e.data);
             }};
-
             mediaRecorder.onstop = () => uploadAudio();
 
             mediaRecorder.start();
@@ -110,6 +114,7 @@ def index():
             document.getElementById("startBtn").disabled = true;
             document.getElementById("stopBtn").disabled = false;
           }} catch(e) {{
+            console.error(e);
             alert("Không truy cập được mic: " + e);
           }}
         }}
@@ -123,101 +128,145 @@ def index():
           }}
         }}
 
+        document.getElementById("startBtn").onclick = startRecording;
+        document.getElementById("stopBtn").onclick = stopRecording;
+
         // ======================================
-        //       UPDATE THRESHOLD & START
+        //   UPDATE THRESHOLD & START LISTENING
         // ======================================
-        document.getElementById("updateBtn").onclick = function() {{
-          const newVal = parseInt(document.getElementById("thresholdBox").value);
-          if (!newVal || newVal < 20) {{
-            alert("Threshold không hợp lệ!");
+        document.getElementById("updateBtn").onclick = async function() {{
+          const val = parseInt(document.getElementById("thresholdBox").value);
+          if (isNaN(val) || val < 1 || val > 100) {{
+            alert("Nhập threshold từ 1–100 (gợi ý 20–30).");
             return;
           }}
-
-          thresholdValue = newVal;
+          thresholdValue = val;
           document.getElementById("status").innerText =
-            "Threshold updated: " + thresholdValue + " → Listening...";
+            "Threshold = " + thresholdValue + "%. Đang bật Active Listening...";
 
-          startActiveListening();
-        }}
+          // nếu đang nghe cũ thì stop lại
+          listening = false;
+          if (detectTimer) {{
+            clearInterval(detectTimer);
+            detectTimer = null;
+          }}
+          if (audioStream) {{
+            audioStream.getTracks().forEach(t => t.stop());
+            audioStream = null;
+          }}
+
+          // bắt đầu session mới
+          await startActiveListening();
+        }};
 
         // =============================
         //      ACTIVE LISTENING LOOP
         // =============================
         async function startActiveListening() {{
-          listening = true;
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+            alert("Trình duyệt không hỗ trợ micro.");
+            return;
+          }}
 
-          audioStream = await navigator.mediaDevices.getUserMedia({{
-            audio: {{
-              echoCancellation:false,
-              noiseSuppression:false,
-              sampleRate: 44100
-            }}
-          }});
+          try {{
+            audioStream = await navigator.mediaDevices.getUserMedia({{
+              audio: {{
+                echoCancellation:false,
+                noiseSuppression:false
+              }}
+            }});
+          }} catch(e) {{
+            console.error(e);
+            document.getElementById("status").innerText =
+              "Không lấy được quyền micro (Active Listening).";
+            return;
+          }}
 
-          const audioCtx = new AudioContext();
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
           const source = audioCtx.createMediaStreamSource(audioStream);
           const analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 2048;
-          let data = new Uint8Array(analyser.fftSize);
-          let triggered = false;
-          let recordStart = 0;
+          analyser.fftSize = 1024;
 
           source.connect(analyser);
 
-          function detectLoop() {{
-            if (!listening) return;
+          let data = new Uint8Array(analyser.fftSize);
+          listening = true;
+          let triggered = false;
+          let recordStartTime = 0;
 
-            analyser.getByteTimeDomainData(data);
-
-            let maxAmp = 0;
-            for (let i = 0; i < data.length; i++) {{
-              let amp = Math.abs(data[i] - 128);
-              if (amp > maxAmp) maxAmp = amp;
-            }}
-
-            if (!triggered && maxAmp >= thresholdValue) {{
-              triggered = true;
-              document.getElementById("status").innerText = 
-                "Sound detected! Recording for up to 5 seconds...";
-
-              startAutoRecord();
-            }}
-
-            if (triggered && Date.now() - recordStart >= 5000) {{
-              stopAutoRecord();
-              return;
-            }}
-
-            requestAnimationFrame(detectLoop);
-          }}
-
+          // Hàm bắt đầu ghi tối đa 5s
           function startAutoRecord() {{
+            if (triggered) return;
+            triggered = true;
             audioChunks = [];
-            mediaRecorder = new MediaRecorder(audioStream);
 
+            mediaRecorder = new MediaRecorder(audioStream);
             mediaRecorder.ondataavailable = e => {{
               if (e.data.size > 0) audioChunks.push(e.data);
             }};
-
-            mediaRecorder.onstop = uploadAudio;
+            mediaRecorder.onstop = () => {{
+              uploadAudio();
+            }};
 
             mediaRecorder.start();
-            recordStart = Date.now();
+            recordStartTime = Date.now();
+            document.getElementById("status").innerText =
+              "Sound detected! Đang ghi (tối đa 5s)...";
           }}
 
+          // Hàm dừng ghi + tắt listening
           function stopAutoRecord() {{
             listening = false;
-            mediaRecorder.stop();
-            audioStream.getTracks().forEach(t => t.stop());
+            if (detectTimer) {{
+              clearInterval(detectTimer);
+              detectTimer = null;
+            }}
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {{
+              mediaRecorder.stop();
+            }}
+            if (audioStream) {{
+              audioStream.getTracks().forEach(t => t.stop());
+              audioStream = null;
+            }}
           }}
 
-          detectLoop();
+          // Loop kiểm tra biên độ
+          detectTimer = setInterval(() => {{
+            if (!listening) return;
+
+            analyser.getByteTimeDomainData(data);
+            let maxAmp = 0;
+            for (let i = 0; i < data.length; i++) {{
+              const v = Math.abs(data[i] - 128);
+              if (v > maxAmp) maxAmp = v;
+            }}
+
+            // maxAmp ~ 0–128 -> convert sang %
+            const levelPercent = (maxAmp / 128) * 100;
+
+            // log ra console nếu muốn debug
+            // console.log("Level:", levelPercent.toFixed(1), "%");
+
+            if (!triggered && levelPercent >= thresholdValue) {{
+              startAutoRecord();
+            }}
+
+            if (triggered && (Date.now() - recordStartTime) >= 5000) {{
+              stopAutoRecord();
+            }}
+          }}, 80);  // check ~12.5 lần/giây
         }}
 
         // ====================================
         //            UPLOAD AUDIO
         // ====================================
         async function uploadAudio() {{
+          if (!audioChunks.length) {{
+            document.getElementById("status").innerText =
+              "Không có dữ liệu audio để upload.";
+            return;
+          }}
+
           const blob = new Blob(audioChunks);
           const form = new FormData();
           form.append("audio", blob, "voice.webm");
@@ -230,6 +279,11 @@ def index():
               method: "POST",
               body: form
             }});
+            if (!res.ok) {{
+              document.getElementById("status").innerText =
+                "Upload failed: " + res.status;
+              return;
+            }}
             const json = await res.json();
 
             const txt =
@@ -240,13 +294,10 @@ def index():
             document.getElementById("result").innerText = txt;
             document.getElementById("status").innerText = "Done.";
           }} catch(e) {{
+            console.error(e);
             document.getElementById("status").innerText = "Upload error: " + e;
           }}
         }}
-
-        // Gán nút
-        document.getElementById("startBtn").onclick = startRecording;
-        document.getElementById("stopBtn").onclick = stopRecording;
       </script>
     </body>
     </html>
