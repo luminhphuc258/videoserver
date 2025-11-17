@@ -4,9 +4,11 @@ import requests
 app = Flask(__name__)
 
 # ==========================================
-# GLOBAL SCAN STATUS
+# GLOBAL SCAN STATUS + MAPPING DATA
 # ==========================================
 scanStatus = "idle"   # idle | scanning | done
+mapping_points = []   # sẽ chứa các point cảm biến gửi lên
+
 
 # ==========================================
 # NODEJS ENDPOINTS
@@ -61,6 +63,13 @@ def index():
       font-weight:bold;
     }}
 
+    #showDataBtn {{
+      background:#ff0;
+      color:#000;
+      font-weight:bold;
+      margin-top:10px;
+    }}
+
     #status {{
       margin-top:15px;
       font-weight:bold;
@@ -74,6 +83,9 @@ def index():
       min-height:70px;
       text-align:left;
       white-space:pre-wrap;
+      max-height:250px;
+      overflow:auto;
+      font-size:13px;
     }}
 
     #mapCanvas {{
@@ -106,6 +118,9 @@ def index():
       <button onclick="triggerScan('{NODEJS_SCAN_360}', '360°')">Scan 360°</button>
   </div>
 
+  <!-- NÚT SHOW DATA -->
+  <button id="showDataBtn">Show Data & Draw Map</button>
+
   <canvas id="mapCanvas" width="400" height="400"></canvas>
 
   <script>
@@ -126,8 +141,83 @@ def index():
     }}
 
 
+    /* ================================
+       SHOW DATA + DRAW MAP 2D
+    ================================ */
+    document.getElementById("showDataBtn").onclick = loadAndDrawMap;
+
+    async function loadAndDrawMap() {{
+      document.getElementById("status").innerText = "Loading mapping data...";
+      try {{
+        const res = await fetch("/get_map");
+        const json = await res.json();
+        const points = json.points || [];
+
+        // Hiển thị raw data
+        document.getElementById("result").innerText =
+          "Mapping points (" + points.length + "):\\n" +
+          JSON.stringify(points, null, 2);
+
+        // Vẽ map
+        drawMap(points);
+        document.getElementById("status").innerText = "Map updated from sensor data.";
+
+      }} catch (e) {{
+        document.getElementById("status").innerText = "Error loading map: " + e;
+      }}
+    }}
+
+    function drawMap(points) {{
+      const canvas = document.getElementById("mapCanvas");
+      const ctx = canvas.getContext("2d");
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      // nền
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // robot ở giữa
+      ctx.fillStyle = "#0f0";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // scale: 1m = 50px, nếu distanceCm
+      const SCALE_PER_M = 50;
+
+      ctx.fillStyle = "#f44";
+
+      points.forEach(p => {{
+        let x = 0;
+        let y = 0;
+
+        // Nếu server đã có x,y dạng mét
+        if (p.x !== undefined && p.y !== undefined) {{
+          x = p.x;       // mét
+          y = p.y;       // mét
+        }}
+        // Nếu chỉ có angle + distance cm → convert sang (x,y)
+        else if (p.angle !== undefined && p.distance !== undefined) {{
+          const angleRad = p.angle * Math.PI / 180.0;
+          const distM = p.distance / 100.0;  // cm → m
+          x = distM * Math.cos(angleRad);
+          y = distM * Math.sin(angleRad);
+        }} else {{
+          // không đủ data
+          return;
+        }}
+
+        const px = cx + x * SCALE_PER_M;
+        const py = cy - y * SCALE_PER_M;
+
+        ctx.fillRect(px - 1, py - 1, 3, 3);
+      }});
+    }}
+
+
     /* ============================================
-       BELOW IS AUDIO ENGINE — KEEP SAME
+       AUDIO ENGINE — GIỮ NGUYÊN
     ============================================ */
 
     let manualStream = null;
@@ -340,7 +430,6 @@ def index():
     return render_template_string(html)
 
 
-
 # ============================================================
 # ROBOT REPORTS SCAN DONE
 # ============================================================
@@ -350,7 +439,6 @@ def scan_done():
     print("📩 Robot reported scan completed.")
     scanStatus = "done"
     return {"status": "ok", "scanStatus": scanStatus}
-
 
 
 # ============================================================
@@ -364,23 +452,47 @@ def set_scanning():
     return {"status": "ok", "scanStatus": scanStatus}
 
 
-
 # ============================================================
-# MODULE CAM BIẾN REQUEST: /get_scanningstatus
+# MODULE CẢM BIẾN: GET SCAN STATUS
 # ============================================================
 @app.route("/get_scanningstatus")
 def get_scanningstatus():
     return {"scanStatus": scanStatus}
 
 
+# ============================================================
+# MODULE CẢM BIẾN: PUSH MAPPING DATA
+#  - Body có thể là:
+#    { "angle": 30, "distance": 120 }
+#  - hoặc:
+#    {{ "points": [ {{angle, distance}}, ... ] }}
+#  - hoặc có sẵn x,y
+# ============================================================
+@app.route("/push_mapping", methods=["POST"])
+def push_mapping():
+    global mapping_points
+    data = request.get_json(force=True, silent=True) or {}
+
+    # Nếu body có dạng {{ "points": [...] }}
+    if isinstance(data.get("points"), list):
+        for p in data["points"]:
+            if isinstance(p, dict):
+                mapping_points.append(p)
+    else:
+        # Body là 1 point đơn
+        if isinstance(data, dict):
+            mapping_points.append(data)
+
+    print(f"📍 Received mapping data, total points = {{len(mapping_points)}}")
+    return { "status": "ok", "total_points": len(mapping_points) }
+
 
 # ============================================================
-# Just a placeholder for future map drawing
+# GET MAP FOR FRONT-END
 # ============================================================
 @app.route("/get_map")
 def get_map():
-    return {"points": []}
-
+    return {"points": mapping_points}
 
 
 # ============================================================
