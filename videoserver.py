@@ -7,27 +7,30 @@ app = Flask(__name__)
 # ==========================================
 # GLOBAL SCAN STATUS + MAP
 # ==========================================
-scanStatus = "idle"        # idle | scanning | done
-mapping_points = []        # list chứa các điểm bản đồ
+scanStatus = "idle"
+mapping_points = []
 
 # ==========================================
-# NODEJS SERVER ENDPOINTS
+# NODEJS ENDPOINTS
 # ==========================================
-NODE_UPLOAD  = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
-SCAN_30  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan30"
-SCAN_45  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan45"
-SCAN_90  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan90"
-SCAN_180 = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan180"
-SCAN_360 = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
+NODE_BASE = "https://embeddedprogramming-healtheworldserver.up.railway.app"
+
+NODE_UPLOAD = f"{NODE_BASE}/upload_audio"
+NODE_CAMERA_ROTATE = f"{NODE_BASE}/camera_rotate"
+
+SCAN_30  = f"{NODE_BASE}/trigger_scan30"
+SCAN_45  = f"{NODE_BASE}/trigger_scan45"
+SCAN_90  = f"{NODE_BASE}/trigger_scan90"
+SCAN_180 = f"{NODE_BASE}/trigger_scan180"
+SCAN_360 = f"{NODE_BASE}/trigger_scan"
 
 # ==========================================
-# HOME PAGE (FIXED TEMPLATE)
+# HOME PAGE
 # ==========================================
 @app.route("/")
 def index():
 
-    html = f"""
-<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -93,10 +96,10 @@ button {{
 
 <script>
 /* ================================
-   CAMERA ROTATE
+   CAMERA ROTATION TO NODEJS SERVER
 ================================ */
 let currentCameraAngle = 0;
-let isBusy = false;
+let camBusy = false;
 
 function updateCamText() {{
     document.getElementById("camAngleStatus").innerText =
@@ -104,17 +107,28 @@ function updateCamText() {{
 }}
 
 async function rotateCamera(dir) {{
-    if (isBusy) return alert("WAIT!");
-    isBusy = true;
+    if (camBusy) return alert("WAIT!");
 
-    if (dir === "left")  currentCameraAngle += 10;
+    camBusy = true;
+
+    if (dir === "left") currentCameraAngle += 10;
     if (dir === "right") currentCameraAngle -= 10;
 
     currentCameraAngle = Math.max(0, Math.min(180, currentCameraAngle));
     updateCamText();
 
-    await fetch(`/camera_rotate?direction=${{dir}}&angle=${{currentCameraAngle}}`);
-    setTimeout(()=> isBusy=false, 1000);
+    const url = "{NODE_CAMERA_ROTATE}" + 
+                "?direction=" + dir +
+                "&angle=" + currentCameraAngle;
+
+    try {{
+        await fetch(url);
+        console.log("Sent to NodeJS:", url);
+    }} catch (e) {{
+        alert("Camera rotate failed!");
+    }}
+
+    setTimeout(()=> camBusy=false, 1000);
 }}
 
 document.getElementById("camLeftBtn").onclick  = ()=> rotateCamera("left");
@@ -174,15 +188,15 @@ function drawMap(points) {{
 }}
 
 /* ================================
-   ACTIVE LISTENING (UPLOAD AUDIO)
+   AUDIO AUTO-LISTENING
 ================================ */
 let mediaStream=null, rec=null, chunks=[];
 const TH=50;
 
 async function uploadAudio() {{
     if (!chunks.length) return;
-    let blob=new Blob(chunks);
-    let fd=new FormData();
+    let blob = new Blob(chunks);
+    let fd = new FormData();
     fd.append("audio", blob, "voice.webm");
 
     document.getElementById("status").innerText="Uploading...";
@@ -221,17 +235,17 @@ async function startAuto() {{
 
     function loop() {{
         ana.getByteTimeDomainData(buf);
-        let level = 0;
-        for (let i=0; i<buf.length; i++)
-            level = Math.max(level, Math.abs(buf[i]-128));
+        let level=0;
+        for (let i=0;i<buf.length;i++)
+            level=Math.max(level, Math.abs(buf[i]-128));
 
-        document.getElementById("status").innerText = "Listening... lvl="+level;
+        document.getElementById("status").innerText="Listening... lvl="+level;
 
-        if (!triggered && level >= TH) {{
-            triggered = true;
+        if (!triggered && level>=TH) {{
+            triggered=true;
             chunks=[];
-            rec = new MediaRecorder(mediaStream);
-            rec.ondataavailable=e=> chunks.push(e.data);
+            rec=new MediaRecorder(mediaStream);
+            rec.ondataavailable=e=>chunks.push(e.data);
             rec.onstop=uploadAudio;
             rec.start();
             startTime=Date.now();
@@ -244,30 +258,21 @@ async function startAuto() {{
 
         requestAnimationFrame(loop);
     }}
+
     loop();
 }}
 
-document.getElementById("startBtn").onclick = startAuto;
-document.getElementById("stopBtn").onclick  = ()=> rec?.stop();
+document.getElementById("startBtn").onclick=startAuto;
+document.getElementById("stopBtn").onclick=()=> rec?.stop();
 
 window.onload=startAuto;
-</script>
 
+</script>
 </body>
 </html>
 """
+
     return render_template_string(html)
-
-
-# ============================================================
-# SCAN DONE FROM ROBOT
-# ============================================================
-@app.route("/scan_done", methods=["POST"])
-def scan_done():
-    global scanStatus
-    scanStatus = "done"
-    print("SCAN DONE")
-    return {"status":"ok", "scanStatus":scanStatus}
 
 # ============================================================
 @app.route("/set_scanning")
@@ -275,27 +280,18 @@ def set_scanning():
     global scanStatus, mapping_points
     scanStatus = "scanning"
     mapping_points = []
-    print("SCAN STARTED → RESET MAP")
     return {"status":"ok"}
 
 # ============================================================
 @app.route("/push_mapping", methods=["POST"])
 def push_mapping():
     global mapping_points
-    try:
-        data = request.get_json()
-        angle = float(data["angle_deg"])
-        dist  = float(data["distance_cm"])
-
-        mapping_points.append({
-            "angle_deg": angle,
-            "distance_cm": dist
-        })
-
-        print(f"ADD POINT {angle}° — {dist}cm")
-        return {"status":"ok", "count": len(mapping_points)}
-    except Exception as e:
-        return {"status":"error","msg":str(e)},400
+    data = request.get_json()
+    mapping_points.append({
+        "angle_deg": float(data["angle_deg"]),
+        "distance_cm": float(data["distance_cm"])
+    })
+    return {"status":"ok", "count":len(mapping_points)}
 
 # ============================================================
 @app.route("/get_map")
@@ -303,9 +299,10 @@ def get_map():
     return jsonify({"points": mapping_points})
 
 # ============================================================
+# Flask OWN endpoint: not used except debug
 @app.route("/camera_rotate")
-def cam_rotate():
-    return {"ok":True}
+def cam_rotate_local():
+    return {"status": "ignored", "reason": "frontend now calls NodeJS directly"}
 
 # ============================================================
 if __name__ == "__main__":
