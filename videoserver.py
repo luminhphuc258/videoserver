@@ -30,6 +30,7 @@ NODEJS_SCAN_360  = f"{NODEJS_BASE}/trigger_scan"
 @app.route("/")
 def index():
     html = """
+{% raw %}
 <!DOCTYPE html>
 <html>
 <head>
@@ -38,32 +39,35 @@ def index():
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <style>
-    body {{
+    body {
       background:#111;
       color:#eee;
       font-family:sans-serif;
       text-align:center;
       padding:20px;
-    }}
+    }
 
-    h2 {{ color:#0ff; }}
+    h2 { color:#0ff; }
 
-    button {{
+    button {
       margin:5px;
       padding:10px 18px;
       font-size:15px;
       border:none;
       border-radius:6px;
       cursor:pointer;
-    }}
+    }
 
-    #scanButtons button {{ background:#0f0; color:#000; font-weight:bold; }}
+    #scanButtons button { background:#0f0; color:#000; font-weight:bold; }
 
-    #showDataBtn {{ background:#ff0; color:#000; font-weight:bold; margin-top:10px; }}
+    #showDataBtn { background:#ff0; color:#000; font-weight:bold; margin-top:10px; }
 
-    #status {{ margin-top:15px; font-weight:bold; }}
+    #status {
+      margin-top:15px;
+      font-weight:bold;
+    }
 
-    #result {{
+    #result {
       margin-top:20px;
       padding:15px;
       border-radius:8px;
@@ -74,21 +78,21 @@ def index():
       max-height:200px;
       overflow:auto;
       font-size:12px;
-    }}
+    }
 
-    #mapCanvas {{
+    #mapCanvas {
       margin-top:25px;
       background:#000;
       border:1px solid #555;
-    }}
+    }
 
     /* CAMERA Rotate buttons */
-    #camControl button {{
+    #camControl button {
       background:#09f;
       color:#000;
       font-weight:bold;
       padding:10px 20px;
-    }}
+    }
   </style>
 </head>
 
@@ -117,11 +121,11 @@ def index():
   <h3 style="margin-top:30px; color:#0f0;">Scan Environment</h3>
 
   <div id="scanButtons">
-      <button onclick="triggerScan('{NODEJS_SCAN_30}', '30°')">Scan 30°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_45}', '45°')">Scan 45°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_90}', '90°')">Scan 90°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_180}', '180°')">Scan 180°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_360}', '360°')">Scan 360°</button>
+      <button onclick="triggerScan('{{ SCAN30 }}', '30°')">Scan 30°</button>
+      <button onclick="triggerScan('{{ SCAN45 }}', '45°')">Scan 45°</button>
+      <button onclick="triggerScan('{{ SCAN90 }}', '90°')">Scan 90°</button>
+      <button onclick="triggerScan('{{ SCAN180 }}', '180°')">Scan 180°</button>
+      <button onclick="triggerScan('{{ SCAN360 }}', '360°')">Scan 360°</button>
   </div>
 
   <!-- SHOW DATA + MAP -->
@@ -129,32 +133,30 @@ def index():
   <canvas id="mapCanvas" width="400" height="400"></canvas>
 
 
-
 <script>
 /* ==========================================================
-   CAMERA ROTATE 20° LEFT / RIGHT  (NEW FEATURE)
+   CAMERA ROTATE 20° LEFT / RIGHT (NEW)
 ========================================================== */
 
-document.getElementById("camLeft20").onclick = async () => {{
-    try {{
-        await fetch("{NODEJS_CAMERA_ROTATE}?direction=left&angle=20");
+document.getElementById("camLeft20").onclick = async () => {
+    try {
+        await fetch("{{ CAM_ROTATE }}?direction=left&angle=20");
         document.getElementById("camAngleStatus").innerText =
             "Sent: Rotate Left 20°";
-    }} catch(e) {{
+    } catch(e) {
         alert("Camera rotate failed!");
-    }}
-}};
+    }
+};
 
-document.getElementById("camRight20").onclick = async () => {{
-    try {{
-        await fetch("{NODEJS_CAMERA_ROTATE}?direction=right&angle=20");
+document.getElementById("camRight20").onclick = async () => {
+    try {
+        await fetch("{{ CAM_ROTATE }}?direction=right&angle=20");
         document.getElementById("camAngleStatus").innerText =
             "Sent: Rotate Right 20°";
-    }} catch(e) {{
+    } catch(e) {
         alert("Camera rotate failed!");
-    }}
-}};
-
+    }
+};
 
 
 /* ==========================================================
@@ -233,7 +235,7 @@ function drawMap(points) {
 
 
 /* ==========================================================
-   AUDIO ENGINE (UNCHANGED)
+   ACTIVE LISTENING ENGINE (UNTOUCHED)
 ========================================================== */
 
 let manualStream = null;
@@ -296,7 +298,7 @@ function stopRecordingManual() {
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
   }
-  document.getElementById("status").innerText = "Processing (manual)...";
+  document.getElementById("status").innerText = "Processing...";
   document.getElementById("startBtn").disabled = false;
   document.getElementById("stopBtn").disabled = true;
 }
@@ -395,7 +397,7 @@ async function uploadAudio(triggerLevel = 0) {
   document.getElementById("status").innerText = "Uploading...";
 
   try {
-    const res = await fetch("{NODEJS_UPLOAD_URL}", {
+    const res = await fetch("{{ UPLOAD }}", {
       method: "POST",
       body: form
     });
@@ -438,9 +440,19 @@ async function uploadAudio(triggerLevel = 0) {
 
 </body>
 </html>
+{% endraw %}
     """
-    return render_template_string(html)
 
+    return render_template_string(
+        html,
+        SCAN30=NODEJS_SCAN_30,
+        SCAN45=NODEJS_SCAN_45,
+        SCAN90=NODEJS_SCAN_90,
+        SCAN180=NODEJS_SCAN_180,
+        SCAN360=NODEJS_SCAN_360,
+        CAM_ROTATE=NODEJS_CAMERA_ROTATE,
+        UPLOAD=NODEJS_UPLOAD_URL
+    )
 
 
 # ============================================================
