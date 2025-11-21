@@ -26,7 +26,7 @@ NODEJS_SCAN_360  = "https://embeddedprogramming-healtheworldserver.up.railway.ap
 # ==========================================
 @app.route("/")
 def index():
-    html = f"""
+    html = """
 <!DOCTYPE html>
 <html>
 <head>
