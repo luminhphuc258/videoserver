@@ -5,526 +5,307 @@ import math
 app = Flask(__name__)
 
 # ==========================================
-# GLOBAL SCAN STATUS + MAP DATA
+# GLOBAL SCAN STATUS + MAP
 # ==========================================
-scanStatus = "idle"   # idle | scanning | done
-mapping_points = []   # lưu các điểm {angle_deg, distance_cm}
+scanStatus = "idle"        # idle | scanning | done
+mapping_points = []        # list chứa các điểm bản đồ
 
 # ==========================================
-# NODEJS ENDPOINTS
+# NODEJS SERVER ENDPOINTS
 # ==========================================
-NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
-
-NODEJS_SCAN_30   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan30"
-NODEJS_SCAN_45   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan45"
-NODEJS_SCAN_90   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan90"
-NODEJS_SCAN_180  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan180"
-NODEJS_SCAN_360  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
+NODE_UPLOAD  = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
+SCAN_30  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan30"
+SCAN_45  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan45"
+SCAN_90  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan90"
+SCAN_180 = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan180"
+SCAN_360 = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
 
 # ==========================================
-# HOME PAGE
+# HOME PAGE (FIXED TEMPLATE)
 # ==========================================
 @app.route("/")
 def index():
-    html = """
+
+    html = f"""
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>Matthew Robot — Auto Active Listening + Scan Map</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body {{
-      background:#111;
-      color:#eee;
-      font-family:sans-serif;
-      text-align:center;
-      padding:20px;
-    }}
+<meta charset="utf-8">
+<title>Matthew Robot — Auto Active Listening + Scan Map</title>
 
-    h2 {{ color:#0ff; }}
-    button {{
-      margin:5px;
-      padding:10px 18px;
-      font-size:15px;
-      border:none;
-      border-radius:6px;
-      cursor:pointer;
-    }}
-
-    #scanButtons button {{
-      background:#0f0;
-      color:#000;
-      font-weight:bold;
-    }}
-
-    #showDataBtn {{
-      background:#ff0;
-      color:#000;
-      font-weight:bold;
-      margin-top:10px;
-    }}
-
-    #status {{
-      margin-top:15px;
-      font-weight:bold;
-    }}
-
-    #result {{
-      margin-top:20px;
-      padding:15px;
-      border-radius:8px;
-      background:#222;
-      min-height:70px;
-      text-align:left;
-      white-space:pre-wrap;
-      max-height:200px;
-      overflow:auto;
-      font-size:12px;
-    }}
-
-    #mapCanvas {{
-      margin-top:25px;
-      background:#000;
-      border:1px solid #555;
-    }}
-
-    #camAngleStatus {{
-      margin-top:10px;
-      color:#0af;
-      font-weight:bold;
-    }}
-
-    #camControl button {{
-      background:#09f;
-      color:#000;
-      font-weight:bold;
-      padding:10px 20px;
-    }}
-  </style>
+<style>
+body {{
+    background:#111;
+    color:#eee;
+    text-align:center;
+    font-family:sans-serif;
+}}
+button {{
+    margin:4px;
+    padding:10px 15px;
+    cursor:pointer;
+    border:none;
+    border-radius:6px;
+}}
+#result {{
+    background:#222;
+    padding:10px;
+    margin-top:15px;
+    height:120px;
+    overflow:auto;
+    white-space:pre-wrap;
+}}
+#mapCanvas {{
+    margin-top:20px;
+    background:#000;
+    border:1px solid #555;
+}}
+</style>
 </head>
 
 <body>
-  <h2>Matthew Robot — Auto Active Listening</h2>
 
-  <div>
-    <button id="startBtn">Speak</button>
-    <button id="stopBtn" disabled>Stop</button>
-  </div>
+<h2 style="color:#0ff;">Matthew Robot — Auto Active Listening</h2>
 
-  <p id="status">Initializing microphone...</p>
-  <div id="result"></div>
+<button id="startBtn">Speak</button>
+<button id="stopBtn" disabled>Stop</button>
+<p id="status">Initializing...</p>
 
-  <!-- CAMERA CONTROL -->
-  <h3 style="margin-top:30px; color:#0af;">Camera Servo Control</h3>
+<div id="result"></div>
 
-  <div id="camControl">
-      <button id="camLeftBtn">Rotate Left +10°</button>
-      <button id="camRightBtn">Rotate Right +10°</button>
-  </div>
+<h3 style="color:#0af;margin-top:25px;">Camera Control</h3>
+<button id="camLeftBtn">Rotate Left +10°</button>
+<button id="camRightBtn">Rotate Right +10°</button>
+<p id="camAngleStatus">Current Camera Angle: 0°</p>
 
-  <p id="camAngleStatus">Current Camera Angle: 0°</p>
+<h3 style="color:#0f0;margin-top:25px;">Scan Area</h3>
+<button onclick="triggerScan('{SCAN_30}','30°')">Scan 30°</button>
+<button onclick="triggerScan('{SCAN_45}','45°')">Scan 45°</button>
+<button onclick="triggerScan('{SCAN_90}','90°')">Scan 90°</button>
+<button onclick="triggerScan('{SCAN_180}','180°')">Scan 180°</button>
+<button onclick="triggerScan('{SCAN_360}','360°')">Scan 360°</button>
 
-  <!-- ============ SCAN BUTTONS ============ -->
-  <h3 style="margin-top:30px; color:#0f0;">Scan Environment</h3>
+<button id="showDataBtn" style="background:#ff0;color:#000;margin-top:10px;">
+    Show Data & Draw Map
+</button>
 
-  <div id="scanButtons">
-      <button onclick="triggerScan('{NODEJS_SCAN_30}', '30°')">Scan 30°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_45}', '45°')">Scan 45°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_90}', '90°')">Scan 90°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_180}', '180°')">Scan 180°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_360}', '360°')">Scan 360°</button>
-  </div>
-
-  <!-- SHOW DATA + MAP -->
-  <button id="showDataBtn">Show Data & Draw Map</button>
-  <canvas id="mapCanvas" width="400" height="400"></canvas>
-
-
+<canvas id="mapCanvas" width="400" height="400"></canvas>
 
 <script>
-/* ==========================================================
-   CAMERA ROTATE CONTROL (NEW)
-========================================================== */
-
+/* ================================
+   CAMERA ROTATE
+================================ */
 let currentCameraAngle = 0;
-let isCameraBusy = false;
+let isBusy = false;
 
-function updateCamStatus() {
+function updateCamText() {{
     document.getElementById("camAngleStatus").innerText =
         "Current Camera Angle: " + currentCameraAngle + "°";
-}
+}}
 
-async function rotateCamera(direction) {
-    if (isCameraBusy) {
-        alert("Please wait 1 second before clicking again!");
-        return;
-    }
-    isCameraBusy = true;
+async function rotateCamera(dir) {{
+    if (isBusy) return alert("WAIT!");
+    isBusy = true;
 
-    if (direction === "left")  currentCameraAngle += 10;
-    if (direction === "right") currentCameraAngle -= 10;
+    if (dir === "left")  currentCameraAngle += 10;
+    if (dir === "right") currentCameraAngle -= 10;
 
     currentCameraAngle = Math.max(0, Math.min(180, currentCameraAngle));
-    updateCamStatus();
+    updateCamText();
 
-    const url = `/camera_rotate?direction=${direction}&angle=${currentCameraAngle}`;
+    await fetch(`/camera_rotate?direction=${{dir}}&angle=${{currentCameraAngle}}`);
+    setTimeout(()=> isBusy=false, 1000);
+}}
 
-    try {
-        await fetch(url);
-        console.log("Camera rotated:", direction, currentCameraAngle);
-    } catch (e) {
-        alert("Camera rotate failed!");
-    }
+document.getElementById("camLeftBtn").onclick  = ()=> rotateCamera("left");
+document.getElementById("camRightBtn").onclick = ()=> rotateCamera("right");
 
-    setTimeout(() => isCameraBusy = false, 1000);
-}
+updateCamText();
 
-document.getElementById("camLeftBtn").onclick = () => rotateCamera("left");
-document.getElementById("camRightBtn").onclick = () => rotateCamera("right");
+/* ================================
+   TRIGGER SCAN
+================================ */
+async function triggerScan(url, label) {{
+    document.getElementById("status").innerText = "Sending scan " + label;
+    await fetch(url);
+    await fetch("/set_scanning");
+    alert("Robot scanning " + label);
+}}
 
-updateCamStatus();
-
-
-
-/* ==========================================================
-   SCAN COMMANDS
-========================================================== */
-async function triggerScan(url, label) {
-    document.getElementById("status").innerText =
-        "Sending scan request " + label + "...";
-
-    try {
-        await fetch(url);
-        await fetch("/set_scanning");
-        alert("Robot scanning " + label);
-    } catch (e) {
-        alert("Cannot send scan command!");
-    }
-}
-
-/* ==========================================================
+/* ================================
    SHOW MAP
-========================================================== */
-document.getElementById("showDataBtn").onclick = async () => {
-    try {
-        const res = await fetch("/get_map");
-        const data = await res.json();
-        drawMap(data.points || []);
-    } catch (e) {
-        alert("Cannot load map!");
-    }
-};
+================================ */
+document.getElementById("showDataBtn").onclick = async ()=>{{
+    let r = await fetch("/get_map");
+    let data = await r.json();
+    drawMap(data.points || []);
+}};
 
-function drawMap(points) {
+function drawMap(points) {{
     const c = document.getElementById("mapCanvas");
     const ctx = c.getContext("2d");
+    ctx.clearRect(0,0,c.width,c.height);
+    const cx=c.width/2, cy=c.height/2;
 
-    ctx.clearRect(0, 0, c.width, c.height);
-
-    const cx = c.width / 2;
-    const cy = c.height / 2;
-
-    ctx.fillStyle = "#0f0";
+    ctx.fillStyle="#0f0";
     ctx.beginPath();
-    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.arc(cx,cy,5,0,6.28);
     ctx.fill();
 
-    if (!points.length) {
-        ctx.fillStyle = "#fff";
-        ctx.fillText("No points yet", cx - 40, cy);
+    if (!points.length) {{
+        ctx.fillStyle="#fff";
+        ctx.fillText("No data", cx-20, cy);
         return;
-    }
+    }}
 
-    let maxR = 1;
-    points.forEach(p => {
-        const d = p.distance_cm || 0;
-        if (d > maxR) maxR = d;
-    });
+    let maxR=1;
+    points.forEach(p=> maxR = Math.max(maxR, p.distance_cm));
 
-    const maxRadiusPx = 160;
-    const scale = maxRadiusPx / maxR;
+    let scale = 150 / maxR;
+    ctx.fillStyle="#f33";
 
-    ctx.fillStyle = "#f44";
-    points.forEach(p => {
-        const angle = p.angle_deg * Math.PI/180;
-        const r = p.distance_cm * scale;
-        const x = cx + r * Math.cos(angle);
-        const y = cy - r * Math.sin(angle);
-        ctx.fillRect(x-2, y-2, 4, 4);
-    });
+    points.forEach(p=>{{
+        let a = p.angle_deg * Math.PI/180;
+        let r = p.distance_cm * scale;
+        let x = cx + r * Math.cos(a);
+        let y = cy - r * Math.sin(a);
+        ctx.fillRect(x-2,y-2,4,4);
+    }});
+}}
 
-    ctx.strokeStyle = "#444";
-    ctx.beginPath();
-    ctx.arc(cx, cy, maxRadiusPx, 0, Math.PI*2);
-    ctx.stroke();
-}
+/* ================================
+   ACTIVE LISTENING (UPLOAD AUDIO)
+================================ */
+let mediaStream=null, rec=null, chunks=[];
+const TH=50;
 
+async function uploadAudio() {{
+    if (!chunks.length) return;
+    let blob=new Blob(chunks);
+    let fd=new FormData();
+    fd.append("audio", blob, "voice.webm");
 
-/* ==========================================================
-   AUDIO ENGINE (KEEP SAME)
-========================================================== */
+    document.getElementById("status").innerText="Uploading...";
 
-let manualStream = null;
-let mediaRecorder = null;
-let audioChunks = [];
-let botCallCount = 0;
-
-let listenStream = null;
-let audioCtx = null;
-let source = null;
-let analyser = null;
-let rafId = null;
-let activeRecorder = null;
-
-function clearCache() {
-  if (rafId) cancelAnimationFrame(rafId);
-  rafId = null;
-
-  if (activeRecorder && activeRecorder.state !== "inactive") {
-    try { activeRecorder.stop(); } catch(e){}
-  }
-  activeRecorder = null;
-
-  if (listenStream) listenStream.getTracks().forEach(t => t.stop());
-  listenStream = null;
-
-  if (audioCtx) {
-    try { audioCtx.close(); } catch(e){}
-  }
-  audioCtx = null;
-  source = null;
-  analyser = null;
-  audioChunks = [];
-}
-
-async function startRecordingManual() {
-  manualStream = await navigator.mediaDevices.getUserMedia({audio:true});
-  audioChunks = [];
-  mediaRecorder = new MediaRecorder(manualStream);
-
-  mediaRecorder.ondataavailable = e => {
-    if (e.data.size > 0) audioChunks.push(e.data);
-  };
-
-  mediaRecorder.onstop = () => {
-    manualStream.getTracks().forEach(t => t.stop());
-    uploadAudio();
-  };
-
-  mediaRecorder.start();
-
-  document.getElementById("status").innerText = "Recording (manual)...";
-  document.getElementById("startBtn").disabled = true;
-  document.getElementById("stopBtn").disabled = false;
-}
-
-function stopRecordingManual() {
-  if (mediaRecorder && mediaRecorder.state !== "inactive") {
-    mediaRecorder.stop();
-  }
-  document.getElementById("status").innerText = "Processing (manual)...";
-  document.getElementById("startBtn").disabled = false;
-  document.getElementById("stopBtn").disabled = true;
-}
-
-document.getElementById("startBtn").onclick = startRecordingManual;
-document.getElementById("stopBtn").onclick  = stopRecordingManual;
-
-const thresholdAmp = 50;
-
-async function startAutoListening() {
-  clearCache();
-  try {
-    listenStream = await navigator.mediaDevices.getUserMedia({audio:true});
-  } catch(e) {
-    document.getElementById("status").innerText = "Cannot access microphone";
-    return;
-  }
-
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  audioCtx = new AudioCtx();
-
-  source = audioCtx.createMediaStreamSource(listenStream);
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 1024;
-  source.connect(analyser);
-
-  const data = new Uint8Array(analyser.fftSize);
-
-  let triggered = false;
-  let recordStart = 0;
-  let lastTriggeredLevel = 0;
-
-  function startAutoRecord() {
-    if (triggered) return;
-    triggered = true;
-
-    audioChunks = [];
-    activeRecorder = new MediaRecorder(listenStream);
-
-    activeRecorder.ondataavailable = e => {
-      if (e.data.size > 0) audioChunks.push(e.data);
-    };
-    activeRecorder.onstop = () => {
-      uploadAudio(lastTriggeredLevel);
-    };
-    activeRecorder.start();
-    recordStart = Date.now();
-  }
-
-  function loop() {
-    analyser.getByteTimeDomainData(data);
-    let maxAmp = 0;
-
-    for (let i=0; i<data.length; i++) {
-      let amp = Math.abs(data[i] - 128);
-      if (amp > maxAmp) maxAmp = amp;
-    }
-
-    document.getElementById("status").innerText =
-      "Listening... Level=" + maxAmp + " (threshold=50)";
-
-    if (!triggered && maxAmp >= thresholdAmp) {
-      lastTriggeredLevel = maxAmp;
-      startAutoRecord();
-    }
-
-    if (triggered && (Date.now() - recordStart >= 2500)) {
-      if (activeRecorder && activeRecorder.state !== "inactive") {
-        activeRecorder.stop();
-      }
-      return;
-    }
-
-    rafId = requestAnimationFrame(loop);
-  }
-
-  loop();
-}
-
-window.onload = startAutoListening;
-
-
-async function uploadAudio(triggerLevel = 0) {
-  if (!audioChunks.length) {
-    document.getElementById("status").innerText = "No audio data.";
-    return;
-  }
-
-  const blob = new Blob(audioChunks);
-  const form = new FormData();
-  form.append("audio", blob, "voice.webm");
-
-  document.getElementById("status").innerText = "Uploading...";
-
-  try {
-    const res = await fetch("{NODEJS_UPLOAD_URL}", {
-      method: "POST",
-      body: form
-    });
-    const json = await res.json();
-
-    const audioUrl = json.audio_url;
+    let res = await fetch("{NODE_UPLOAD}", {{
+        method:"POST",
+        body: fd
+    }});
+    let json = await res.json();
 
     document.getElementById("result").innerText =
-      "Trigger Level: " + triggerLevel + "\\n" +
-      "Transcript: " + (json.transcript || "") + "\\n" +
-      "Label: " + (json.label || "") + "\\n" +
-      "Audio URL: " + (audioUrl || "");
+        "Transcript: "+json.transcript+"\\nLabel: "+json.label+"\\nURL: "+json.audio_url;
 
-    clearCache();
-    document.getElementById("status").innerText = "Robot speaking...";
-
-    if (audioUrl) {
-      const audio = new Audio(audioUrl);
-
-      audio.onloadedmetadata = () => {
-        const durationMs = audio.duration * 1000;
+    if (json.audio_url) {{
+        let audio=new Audio(json.audio_url);
         audio.play();
+        audio.onended=()=> startAuto();
+    }} else {{
+        startAuto();
+    }}
+}}
 
-        const waitTime = durationMs + 2000;
+async function startAuto() {{
+    chunks=[];
+    if (mediaStream) mediaStream.getTracks().forEach(t=>t.stop());
+    mediaStream = await navigator.mediaDevices.getUserMedia({{audio:true}});
 
-        setTimeout(() => {
-          document.getElementById("status").innerText = "Restarting auto listening...";
-          startAutoListening();
-        }, waitTime);
-      };
-    } else {
-      setTimeout(startAutoListening, 800);
-    }
+    let ctx = new AudioContext();
+    let src = ctx.createMediaStreamSource(mediaStream);
+    let ana = ctx.createAnalyser();
+    src.connect(ana);
+    ana.fftSize=1024;
+    let buf = new Uint8Array(1024);
+    let triggered=false;
+    let startTime=0;
 
-  } catch (err) {
-    document.getElementById("status").innerText = "Upload error: " + err;
-  }
-}
+    function loop() {{
+        ana.getByteTimeDomainData(buf);
+        let level = 0;
+        for (let i=0; i<buf.length; i++)
+            level = Math.max(level, Math.abs(buf[i]-128));
+
+        document.getElementById("status").innerText = "Listening... lvl="+level;
+
+        if (!triggered && level >= TH) {{
+            triggered = true;
+            chunks=[];
+            rec = new MediaRecorder(mediaStream);
+            rec.ondataavailable=e=> chunks.push(e.data);
+            rec.onstop=uploadAudio;
+            rec.start();
+            startTime=Date.now();
+        }}
+
+        if (triggered && Date.now()-startTime > 2500) {{
+            if (rec && rec.state!=="inactive") rec.stop();
+            return;
+        }}
+
+        requestAnimationFrame(loop);
+    }}
+    loop();
+}}
+
+document.getElementById("startBtn").onclick = startAuto;
+document.getElementById("stopBtn").onclick  = ()=> rec?.stop();
+
+window.onload=startAuto;
 </script>
 
 </body>
 </html>
-    """
+"""
     return render_template_string(html)
 
 
-
 # ============================================================
-# ROBOT REPORTS SCAN DONE
+# SCAN DONE FROM ROBOT
 # ============================================================
 @app.route("/scan_done", methods=["POST"])
 def scan_done():
     global scanStatus
-    print("📩 Robot reported scan completed.")
     scanStatus = "done"
-    return {"status": "ok", "scanStatus": scanStatus}
+    print("SCAN DONE")
+    return {"status":"ok", "scanStatus":scanStatus}
 
-# ============================================================
-# NODEJS tells us that a scan has started
 # ============================================================
 @app.route("/set_scanning")
 def set_scanning():
     global scanStatus, mapping_points
     scanStatus = "scanning"
-    mapping_points = []  # clear old map
-    print("⚡ Scan started → mapping_points cleared")
-    return {"status": "ok", "scanStatus": scanStatus}
+    mapping_points = []
+    print("SCAN STARTED → RESET MAP")
+    return {"status":"ok"}
 
-# ============================================================
-# Client pushes mapping points to server
 # ============================================================
 @app.route("/push_mapping", methods=["POST"])
 def push_mapping():
     global mapping_points
     try:
-        data = request.get_json(force=True) or {}
-        angle_deg = float(data.get("angle_deg", 0))
-        distance_cm = float(data.get("distance_cm", 0))
+        data = request.get_json()
+        angle = float(data["angle_deg"])
+        dist  = float(data["distance_cm"])
 
         mapping_points.append({
-            "angle_deg": angle_deg,
-            "distance_cm": distance_cm
+            "angle_deg": angle,
+            "distance_cm": dist
         })
 
-        print(f"➕ Add point angle={angle_deg}°, dist={distance_cm}cm "
-              f"(total={len(mapping_points)})")
-
-        return jsonify({"status": "ok", "count": len(mapping_points)})
+        print(f"ADD POINT {angle}° — {dist}cm")
+        return {"status":"ok", "count": len(mapping_points)}
     except Exception as e:
-        print("❌ push_mapping error:", e)
-        return jsonify({"status": "error", "message": str(e)}), 400
+        return {"status":"error","msg":str(e)},400
 
-# ============================================================
-# get scanning status
-# ============================================================
-@app.route("/get_scanningstatus")
-def get_scanningstatus():
-    return {"scanStatus": scanStatus}
-
-# ============================================================
-# get map data
 # ============================================================
 @app.route("/get_map")
 def get_map():
     return jsonify({"points": mapping_points})
+
+# ============================================================
+@app.route("/camera_rotate")
+def cam_rotate():
+    return {"ok":True}
 
 # ============================================================
 if __name__ == "__main__":
