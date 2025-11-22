@@ -151,31 +151,29 @@ TEMPLATE_HTML = """
    CAMERA — FIXED VERSION, TỰ TĂNG / GIẢM GÓC
 ========================================================== */
 
-let camAngle = 90;   // bắt đầu từ 90°, giống ESP32
+/* CAMERA ROTATE FIXED */
 const NODE_CAMERA = "__NODE_CAMERA__";
 
-function sendCameraRotate() {
-    const url = NODE_CAMERA + "?angle=" + camAngle;
-    return fetch(url).then(r => r.json());
+let camAngle = 90;
+
+async function rotateCamera(dir) {
+
+    if (dir === "left") camAngle += 20;
+    if (dir === "right") camAngle -= 20;
+
+    camAngle = Math.max(0, Math.min(180, camAngle));
+
+    const url = NODE_CAMERA + `?direction=abs&angle=${camAngle}`;
+
+    const res = await fetch(url);
+    const js = await res.json();
+
+    document.getElementById("camAngleStatus").innerText =
+        `Camera = ${camAngle}° → ${js.status}`;
 }
 
-document.getElementById("camLeft20").onclick = async () => {
-    camAngle += 20;
-    if (camAngle > 180) camAngle = 180;
-
-    const js = await sendCameraRotate();
-    document.getElementById("camAngleStatus").innerText =
-        "Camera = " + camAngle + "° → " + js.status;
-};
-
-document.getElementById("camRight20").onclick = async () => {
-    camAngle -= 20;
-    if (camAngle < 0) camAngle = 0;
-
-    const js = await sendCameraRotate();
-    document.getElementById("camAngleStatus").innerText =
-        "Camera = " + camAngle + "° → " + js.status;
-};
+document.getElementById("camLeft20").onclick  = () => rotateCamera("left");
+document.getElementById("camRight20").onclick = () => rotateCamera("right");
 
 
 
