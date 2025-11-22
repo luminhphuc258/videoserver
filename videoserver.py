@@ -152,6 +152,7 @@ TEMPLATE_HTML = """
 ========================================================== */
 
 let camAngle = 90;   // bắt đầu từ 90°, giống ESP32
+const NODE_CAMERA = "__NODE_CAMERA__";
 
 function sendCameraRotate() {
     const url = NODE_CAMERA + "?angle=" + camAngle;
