@@ -14,27 +14,29 @@ mapping_points = []
 # NODEJS ENDPOINTS
 # ==========================================
 NODEJS_BASE = "https://embeddedprogramming-healtheworldserver.up.railway.app"
+
 NODE_UPLOAD = f"{NODEJS_BASE}/upload_audio"
 NODE_CAMERA = f"{NODEJS_BASE}/camera_rotate"
 
-SCAN30 = f"{NODEJS_BASE}/trigger_scan30"
-SCAN45 = f"{NODEJS_BASE}/trigger_scan45"
-SCAN90 = f"{NODEJS_BASE}/trigger_scan90"
+SCAN30  = f"{NODEJS_BASE}/trigger_scan30"
+SCAN45  = f"{NODEJS_BASE}/trigger_scan45"
+SCAN90  = f"{NODEJS_BASE}/trigger_scan90"
 SCAN180 = f"{NODEJS_BASE}/trigger_scan180"
 SCAN360 = f"{NODEJS_BASE}/trigger_scan"
 
 
 # ==========================================
-# HOME PAGE (NO JINJA2 TOKENS!)
+# HOME PAGE
 # ==========================================
 @app.route("/")
 def index():
+
     html = f"""
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Matthew Robot — Auto Active Listening + Scan Map</title>
+  <title>Matthew Robot — Active Listening + Scan Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <style>
@@ -45,19 +47,14 @@ def index():
       text-align:center;
       padding:20px;
     }}
-    h2 {{ color:#0ff; }}
-
     button {{
-      margin:5px;
       padding:10px 18px;
-      font-size:15px;
+      margin:5px;
       border:none;
       border-radius:6px;
       cursor:pointer;
+      font-size:15px;
     }}
-
-    #scanButtons button {{ background:#0f0; color:#000; font-weight:bold; }}
-    #showDataBtn {{ background:#ff0; color:#000; margin-top:10px; }}
 
     #result {{
       text-align:left;
@@ -72,18 +69,22 @@ def index():
       font-size:12px;
     }}
 
-    /* CAMERA buttons */
     #camControl button {{
       background:#09f;
       color:#000;
       font-weight:bold;
-      padding:10px 20px;
+    }}
+
+    #scanButtons button {{
+      background:#0f0;
+      color:#000;
+      font-weight:bold;
     }}
   </style>
 </head>
 
 <body>
-  <h2>Matthew Robot — Auto Active Listening</h2>
+  <h2 style='color:#0ff;'>Matthew Robot — Auto Active Listening</h2>
 
   <div>
     <button id="startBtn">Speak</button>
@@ -103,9 +104,9 @@ def index():
 
   <p id="camAngleStatus">Camera rotation commands ready</p>
 
-
   <!-- SCAN BUTTONS -->
   <h3 style='color:#0f0;'>Scan Environment</h3>
+
   <div id="scanButtons">
       <button onclick="triggerScan('{SCAN30}', '30°')">Scan 30°</button>
       <button onclick="triggerScan('{SCAN45}', '45°')">Scan 45°</button>
@@ -114,32 +115,42 @@ def index():
       <button onclick="triggerScan('{SCAN360}', '360°')">Scan 360°</button>
   </div>
 
-  <button id="showDataBtn">Show Data & Draw Map</button>
-  <canvas id="mapCanvas" width="400" height="400"></canvas>
+  <br>
+  <button id="showDataBtn" style="background:#ff0;color:#000;">Show Map</button>
+
+  <canvas id="mapCanvas" width="400" height="400" style="background:#000;margin-top:15px;"></canvas>
 
 
 <script>
 /* ==========================================================
-   CAMERA ROTATE 20°
+   CAMERA ROTATE FIXED — NOW WORKS 100%
 ========================================================== */
 document.getElementById("camLeft20").onclick = async () => {{
-    await fetch("{NODE_CAMERA}?direction=left&angle=20");
-    document.getElementById("camAngleStatus").innerText = "Sent: Left 20°";
+    const res = await fetch("{NODE_CAMERA}?direction=left&angle=20");
+    const js = await res.json();
+    document.getElementById("camAngleStatus").innerText =
+        "Sent: LEFT 20° → " + js.status;
 }};
 
 document.getElementById("camRight20").onclick = async () => {{
-    await fetch("{NODE_CAMERA}?direction=right&angle=20");
-    document.getElementById("camAngleStatus").innerText = "Sent: Right 20°";
+    const res = await fetch("{NODE_CAMERA}?direction=right&angle=20");
+    const js = await res.json();
+    document.getElementById("camAngleStatus").innerText =
+        "Sent: RIGHT 20° → " + js.status;
 }};
 
 
 /* ==========================================================
-   SCAN
+   SCAN BUTTONS
 ========================================================== */
 async function triggerScan(url, label) {{
     document.getElementById("status").innerText = "Sending scan " + label + "...";
-    await fetch(url);
-    await fetch("/set_scanning");
+    try {{
+        await fetch(url);
+        await fetch("/set_scanning");
+    }} catch (e) {{
+        document.getElementById("status").innerText = "Scan error: " + e;
+    }}
 }}
 
 
@@ -147,9 +158,9 @@ async function triggerScan(url, label) {{
    SHOW MAP
 ========================================================== */
 document.getElementById("showDataBtn").onclick = async () => {{
-    const res = await fetch("/get_map");
-    const data = await res.json();
-    drawMap(data.points);
+    const r = await fetch("/get_map");
+    const js = await r.json();
+    drawMap(js.points);
 }};
 
 function drawMap(points) {{
@@ -157,7 +168,8 @@ function drawMap(points) {{
     const ctx = c.getContext("2d");
     ctx.clearRect(0,0,c.width,c.height);
 
-    const cx = c.width/2, cy = c.height/2;
+    const cx = c.width/2;
+    const cy = c.height/2;
 
     ctx.fillStyle="#0f0";
     ctx.beginPath();
@@ -166,8 +178,7 @@ function drawMap(points) {{
 
     if (!points.length) return;
 
-    let maxR = Math.max(...points.map(p=>p.distance_cm));
-
+    let maxR = Math.max(...points.map(p => p.distance_cm));
     const scale = 160 / maxR;
 
     ctx.fillStyle="#f44";
@@ -182,7 +193,7 @@ function drawMap(points) {{
 
 
 /* ==========================================================
-   ACTIVE LISTENING (UNCHANGED)
+   ACTIVE LISTENING (unchanged)
 ========================================================== */
 let manualStream=null, mediaRecorder=null, audioChunks=[];
 let listenStream=null, audioCtx=null, source=null, analyser=null;
@@ -193,15 +204,25 @@ function clearCache(){{
     if (activeRecorder && activeRecorder.state!=="inactive") activeRecorder.stop();
     if (listenStream) listenStream.getTracks().forEach(t=>t.stop());
     if (audioCtx) audioCtx.close();
-    source=null; analyser=null; audioChunks=[]; 
+    source=null; analyser=null; audioChunks=[];
 }}
 
 async function startRecordingManual(){{
     manualStream=await navigator.mediaDevices.getUserMedia({{audio:true}});
-    audioChunks=[]; mediaRecorder=new MediaRecorder(manualStream);
-    mediaRecorder.ondataavailable=e=>{{if(e.data.size>0)audioChunks.push(e.data);}};
-    mediaRecorder.onstop=()=>{{ manualStream.getTracks().forEach(t=>t.stop()); uploadAudio(); }};
+    audioChunks=[];
+    mediaRecorder=new MediaRecorder(manualStream);
+
+    mediaRecorder.ondataavailable=e=>{{
+        if(e.data.size>0) audioChunks.push(e.data);
+    }};
+
+    mediaRecorder.onstop=()=>{{
+        manualStream.getTracks().forEach(t=>t.stop());
+        uploadAudio();
+    }};
+
     mediaRecorder.start();
+
     document.getElementById("status").innerText="Recording...";
     document.getElementById("startBtn").disabled=true;
     document.getElementById("stopBtn").disabled=false;
@@ -217,13 +238,15 @@ function stopRecordingManual(){{
 document.getElementById("startBtn").onclick=startRecordingManual;
 document.getElementById("stopBtn").onclick=stopRecordingManual;
 
-const thresholdAmp=50;
+
+const thresholdAmp = 50;
 
 async function startAutoListening(){{
     clearCache();
+
     try {{
         listenStream=await navigator.mediaDevices.getUserMedia({{audio:true}});
-    }} catch(e){{
+    }} catch(e) {{
         document.getElementById("status").innerText="Cannot access microphone";
         return;
     }}
@@ -242,9 +265,15 @@ async function startAutoListening(){{
         if(triggered) return;
         triggered=true;
         audioChunks=[];
+
         activeRecorder=new MediaRecorder(listenStream);
-        activeRecorder.ondataavailable=e=>{{if(e.data.size>0)audioChunks.push(e.data);}};
+
+        activeRecorder.ondataavailable=e=>{{
+            if(e.data.size>0) audioChunks.push(e.data);
+        }};
+
         activeRecorder.onstop=()=> uploadAudio(lastLevel);
+
         activeRecorder.start();
         recordStart=Date.now();
     }}
@@ -252,7 +281,9 @@ async function startAutoListening(){{
     function loop(){{
         analyser.getByteTimeDomainData(data);
         let maxAmp=0;
-        for(let i=0;i<data.length;i++) maxAmp=Math.max(maxAmp, Math.abs(data[i]-128));
+
+        for(let i=0;i<data.length;i++)
+            maxAmp=Math.max(maxAmp, Math.abs(data[i]-128));
 
         document.getElementById("status").innerText="Listening... Level="+maxAmp;
 
@@ -324,7 +355,7 @@ async function uploadAudio(level=0){{
 
 
 # ============================================================
-# SCAN STATUS ENDPOINTS
+# BACKEND SCAN HANDLERS
 # ============================================================
 @app.route("/scan_done", methods=["POST"])
 def scan_done():
@@ -357,6 +388,8 @@ def get_map():
     return jsonify({"points": mapping_points})
 
 
+# ============================================================
+# RUN SERVER
 # ============================================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, threaded=True)
