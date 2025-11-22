@@ -1,6 +1,4 @@
 from flask import Flask, render_template_string, request, jsonify
-import requests
-import math
 
 app = Flask(__name__)
 
@@ -8,25 +6,29 @@ app = Flask(__name__)
 # GLOBAL SCAN STATUS + MAP DATA
 # ==========================================
 scanStatus = "idle"   # idle | scanning | done
-mapping_points = []   # lưu các điểm {angle_deg, distance_cm}
+mapping_points = []   # list các điểm {angle_deg, distance_cm}
 
 # ==========================================
-# NODEJS ENDPOINTS
+# NODEJS ENDPOINTS (SERVER CHÍNH)
 # ==========================================
-NODEJS_UPLOAD_URL = "https://embeddedprogramming-healtheworldserver.up.railway.app/upload_audio"
+NODEJS_BASE = "https://embeddedprogramming-healtheworldserver.up.railway.app"
 
-NODEJS_SCAN_30   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan30"
-NODEJS_SCAN_45   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan45"
-NODEJS_SCAN_90   = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan90"
-NODEJS_SCAN_180  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan180"
-NODEJS_SCAN_360  = "https://embeddedprogramming-healtheworldserver.up.railway.app/trigger_scan"
+NODEJS_UPLOAD_URL = NODEJS_BASE + "/upload_audio"
+NODEJS_CAMERA_URL = NODEJS_BASE + "/camera_rotate"
+
+NODEJS_SCAN_30  = NODEJS_BASE + "/trigger_scan30"
+NODEJS_SCAN_45  = NODEJS_BASE + "/trigger_scan45"
+NODEJS_SCAN_90  = NODEJS_BASE + "/trigger_scan90"
+NODEJS_SCAN_180 = NODEJS_BASE + "/trigger_scan180"
+NODEJS_SCAN_360 = NODEJS_BASE + "/trigger_scan"
+
 
 # ==========================================
 # HOME PAGE
+#  - KHÔNG dùng f-string trong template để tránh lỗi { } / }
+#  - Dùng placeholder __XXX__ rồi .replace() bên dưới
 # ==========================================
-@app.route("/")
-def index():
-    html = f"""
+TEMPLATE_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -34,43 +36,44 @@ def index():
   <title>Matthew Robot — Auto Active Listening + Scan Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body {{
+    body {
       background:#111;
       color:#eee;
       font-family:sans-serif;
       text-align:center;
       padding:20px;
-    }}
+    }
 
-    h2 {{ color:#0ff; }}
-    button {{
+    h2 { color:#0ff; }
+
+    button {
       margin:5px;
       padding:10px 18px;
       font-size:15px;
       border:none;
       border-radius:6px;
       cursor:pointer;
-    }}
+    }
 
-    #scanButtons button {{
+    #scanButtons button {
       background:#0f0;
       color:#000;
       font-weight:bold;
-    }}
+    }
 
-    #showDataBtn {{
+    #showDataBtn {
       background:#ff0;
       color:#000;
       font-weight:bold;
       margin-top:10px;
-    }}
+    }
 
-    #status {{
+    #status {
       margin-top:15px;
       font-weight:bold;
-    }}
+    }
 
-    #result {{
+    #result {
       margin-top:20px;
       padding:15px;
       border-radius:8px;
@@ -81,26 +84,26 @@ def index():
       max-height:200px;
       overflow:auto;
       font-size:12px;
-    }}
+    }
 
-    #mapCanvas {{
+    #mapCanvas {
       margin-top:25px;
       background:#000;
       border:1px solid #555;
-    }}
+    }
 
-    #camAngleStatus {{
+    #camAngleStatus {
       margin-top:10px;
       color:#0af;
       font-weight:bold;
-    }}
+    }
 
-    #camControl button {{
+    #camControl button {
       background:#09f;
       color:#000;
       font-weight:bold;
       padding:10px 20px;
-    }}
+    }
   </style>
 </head>
 
@@ -119,72 +122,57 @@ def index():
   <h3 style="margin-top:30px; color:#0af;">Camera Servo Control</h3>
 
   <div id="camControl">
-      <button id="camLeftBtn">Rotate Left +10°</button>
-      <button id="camRightBtn">Rotate Right +10°</button>
+      <button id="camLeft20">Rotate Left 20°</button>
+      <button id="camRight20">Rotate Right 20°</button>
   </div>
 
-  <p id="camAngleStatus">Current Camera Angle: 0°</p>
+  <p id="camAngleStatus">Camera rotation commands ready</p>
 
   <!-- ============ SCAN BUTTONS ============ -->
   <h3 style="margin-top:30px; color:#0f0;">Scan Environment</h3>
 
   <div id="scanButtons">
-      <button onclick="triggerScan('{NODEJS_SCAN_30}', '30°')">Scan 30°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_45}', '45°')">Scan 45°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_90}', '90°')">Scan 90°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_180}', '180°')">Scan 180°</button>
-      <button onclick="triggerScan('{NODEJS_SCAN_360}', '360°')">Scan 360°</button>
+      <button onclick="triggerScan('__SCAN30__', '30°')">Scan 30°</button>
+      <button onclick="triggerScan('__SCAN45__', '45°')">Scan 45°</button>
+      <button onclick="triggerScan('__SCAN90__', '90°')">Scan 90°</button>
+      <button onclick="triggerScan('__SCAN180__', '180°')">Scan 180°</button>
+      <button onclick="triggerScan('__SCAN360__', '360°')">Scan 360°</button>
   </div>
 
   <!-- SHOW DATA + MAP -->
   <button id="showDataBtn">Show Data & Draw Map</button>
   <canvas id="mapCanvas" width="400" height="400"></canvas>
 
-
-
 <script>
 /* ==========================================================
-   CAMERA ROTATE CONTROL (NEW)
+   CAMERA ROTATE → GỌI THẲNG NODEJS /camera_rotate
 ========================================================== */
 
-let currentCameraAngle = 0;
-let isCameraBusy = false;
+const NODE_CAMERA = "__NODE_CAMERA__";
 
-function updateCamStatus() {
-    document.getElementById("camAngleStatus").innerText =
-        "Current Camera Angle: " + currentCameraAngle + "°";
-}
-
-async function rotateCamera(direction) {
-    if (isCameraBusy) {
-        alert("Please wait 1 second before clicking again!");
-        return;
-    }
-    isCameraBusy = true;
-
-    if (direction === "left")  currentCameraAngle += 10;
-    if (direction === "right") currentCameraAngle -= 10;
-
-    currentCameraAngle = Math.max(0, Math.min(180, currentCameraAngle));
-    updateCamStatus();
-
-    const url = `/camera_rotate?direction=${direction}&angle=${currentCameraAngle}`;
-
+document.getElementById("camLeft20").onclick = async () => {
     try {
-        await fetch(url);
-        console.log("Camera rotated:", direction, currentCameraAngle);
-    } catch (e) {
-        alert("Camera rotate failed!");
+        const res = await fetch(NODE_CAMERA + "?direction=left&angle=20");
+        const js  = await res.json();
+        document.getElementById("camAngleStatus").innerText =
+            "Sent: LEFT 20° → " + js.status;
+    } catch(e) {
+        document.getElementById("camAngleStatus").innerText =
+            "Error sending LEFT 20°: " + e;
     }
+};
 
-    setTimeout(() => isCameraBusy = false, 1000);
-}
-
-document.getElementById("camLeftBtn").onclick = () => rotateCamera("left");
-document.getElementById("camRightBtn").onclick = () => rotateCamera("right");
-
-updateCamStatus();
-
+document.getElementById("camRight20").onclick = async () => {
+    try {
+        const res = await fetch(NODE_CAMERA + "?direction=right&angle=20");
+        const js  = await res.json();
+        document.getElementById("camAngleStatus").innerText =
+            "Sent: RIGHT 20° → " + js.status;
+    } catch(e) {
+        document.getElementById("camAngleStatus").innerText =
+            "Error sending RIGHT 20°: " + e;
+    }
+};
 
 
 /* ==========================================================
@@ -197,9 +185,8 @@ async function triggerScan(url, label) {
     try {
         await fetch(url);
         await fetch("/set_scanning");
-        alert("Robot scanning " + label);
     } catch (e) {
-        alert("Cannot send scan command!");
+        document.getElementById("status").innerText = "Scan error: " + e;
     }
 }
 
@@ -212,19 +199,19 @@ document.getElementById("showDataBtn").onclick = async () => {
         const data = await res.json();
         drawMap(data.points || []);
     } catch (e) {
-        alert("Cannot load map!");
+        alert("Cannot load map: " + e);
     }
 };
 
 function drawMap(points) {
     const c = document.getElementById("mapCanvas");
     const ctx = c.getContext("2d");
-
     ctx.clearRect(0, 0, c.width, c.height);
 
     const cx = c.width / 2;
     const cy = c.height / 2;
 
+    // robot ở giữa
     ctx.fillStyle = "#0f0";
     ctx.beginPath();
     ctx.arc(cx, cy, 5, 0, Math.PI * 2);
@@ -236,6 +223,7 @@ function drawMap(points) {
         return;
     }
 
+    // tìm khoảng cách lớn nhất để scale
     let maxR = 1;
     points.forEach(p => {
         const d = p.distance_cm || 0;
@@ -247,28 +235,29 @@ function drawMap(points) {
 
     ctx.fillStyle = "#f44";
     points.forEach(p => {
-        const angle = p.angle_deg * Math.PI/180;
+        const angle = p.angle_deg * Math.PI / 180;
         const r = p.distance_cm * scale;
         const x = cx + r * Math.cos(angle);
         const y = cy - r * Math.sin(angle);
-        ctx.fillRect(x-2, y-2, 4, 4);
+        ctx.fillRect(x - 2, y - 2, 4, 4);
     });
 
     ctx.strokeStyle = "#444";
     ctx.beginPath();
-    ctx.arc(cx, cy, maxRadiusPx, 0, Math.PI*2);
+    ctx.arc(cx, cy, maxRadiusPx, 0, Math.PI * 2);
     ctx.stroke();
 }
 
 
 /* ==========================================================
-   AUDIO ENGINE (KEEP SAME)
+   AUDIO ENGINE (GIỮ NGUYÊN LOGIC CŨ)
 ========================================================== */
+
+const NODE_UPLOAD = "__NODE_UPLOAD__";
 
 let manualStream = null;
 let mediaRecorder = null;
 let audioChunks = [];
-let botCallCount = 0;
 
 let listenStream = null;
 let audioCtx = null;
@@ -314,7 +303,7 @@ async function startRecordingManual() {
 
   mediaRecorder.start();
 
-  document.getElementById("status").innerText = "Recording (manual)...";
+  document.getElementById("status").innerText = "Recording...";
   document.getElementById("startBtn").disabled = true;
   document.getElementById("stopBtn").disabled = false;
 }
@@ -323,7 +312,7 @@ function stopRecordingManual() {
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
   }
-  document.getElementById("status").innerText = "Processing (manual)...";
+  document.getElementById("status").innerText = "Processing...";
   document.getElementById("startBtn").disabled = false;
   document.getElementById("stopBtn").disabled = true;
 }
@@ -377,8 +366,8 @@ async function startAutoListening() {
     analyser.getByteTimeDomainData(data);
     let maxAmp = 0;
 
-    for (let i=0; i<data.length; i++) {
-      let amp = Math.abs(data[i] - 128);
+    for (let i = 0; i < data.length; i++) {
+      const amp = Math.abs(data[i] - 128);
       if (amp > maxAmp) maxAmp = amp;
     }
 
@@ -405,7 +394,6 @@ async function startAutoListening() {
 
 window.onload = startAutoListening;
 
-
 async function uploadAudio(triggerLevel = 0) {
   if (!audioChunks.length) {
     document.getElementById("status").innerText = "No audio data.";
@@ -419,7 +407,7 @@ async function uploadAudio(triggerLevel = 0) {
   document.getElementById("status").innerText = "Uploading...";
 
   try {
-    const res = await fetch("{NODEJS_UPLOAD_URL}", {
+    const res = await fetch(NODE_UPLOAD, {
       method: "POST",
       body: form
     });
@@ -446,7 +434,8 @@ async function uploadAudio(triggerLevel = 0) {
         const waitTime = durationMs + 2000;
 
         setTimeout(() => {
-          document.getElementById("status").innerText = "Restarting auto listening...";
+          document.getElementById("status").innerText =
+            "Restarting auto listening...";
           startAutoListening();
         }, waitTime);
       };
@@ -462,13 +451,25 @@ async function uploadAudio(triggerLevel = 0) {
 
 </body>
 </html>
-    """
+"""
+
+
+@app.route("/")
+def index():
+    # chèn URL Node.js vào template mà không dùng f-string
+    html = TEMPLATE_HTML
+    html = html.replace("__NODE_UPLOAD__", NODEJS_UPLOAD_URL)
+    html = html.replace("__NODE_CAMERA__", NODEJS_CAMERA_URL)
+    html = html.replace("__SCAN30__", NODEJS_SCAN_30)
+    html = html.replace("__SCAN45__", NODEJS_SCAN_45)
+    html = html.replace("__SCAN90__", NODEJS_SCAN_90)
+    html = html.replace("__SCAN180__", NODEJS_SCAN_180)
+    html = html.replace("__SCAN360__", NODEJS_SCAN_360)
     return render_template_string(html)
 
 
-
 # ============================================================
-# ROBOT REPORTS SCAN DONE
+# ROBOT REPORTS SCAN DONE (nếu dùng từ ESP32)
 # ============================================================
 @app.route("/scan_done", methods=["POST"])
 def scan_done():
@@ -477,8 +478,9 @@ def scan_done():
     scanStatus = "done"
     return {"status": "ok", "scanStatus": scanStatus}
 
+
 # ============================================================
-# NODEJS tells us that a scan has started
+# SET SCANNING (được JS gọi sau khi bấm nút Scan)
 # ============================================================
 @app.route("/set_scanning")
 def set_scanning():
@@ -488,8 +490,10 @@ def set_scanning():
     print("⚡ Scan started → mapping_points cleared")
     return {"status": "ok", "scanStatus": scanStatus}
 
+
 # ============================================================
-# Client pushes mapping points to server
+# ESP32 PUSH MAPPING POINTS
+# body: { "angle_deg": ..., "distance_cm": ... }
 # ============================================================
 @app.route("/push_mapping", methods=["POST"])
 def push_mapping():
@@ -504,28 +508,35 @@ def push_mapping():
             "distance_cm": distance_cm
         })
 
-        print(f"➕ Add point angle={angle_deg}°, dist={distance_cm}cm "
-              f"(total={len(mapping_points)})")
+        print(
+            f"➕ Add point angle={angle_deg}°, dist={distance_cm}cm "
+            f"(total={len(mapping_points)})"
+        )
 
         return jsonify({"status": "ok", "count": len(mapping_points)})
     except Exception as e:
         print("❌ push_mapping error:", e)
         return jsonify({"status": "error", "message": str(e)}), 400
 
+
 # ============================================================
-# get scanning status
+# GET SCANNING STATUS (nếu cần)
 # ============================================================
 @app.route("/get_scanningstatus")
 def get_scanningstatus():
     return {"scanStatus": scanStatus}
 
+
 # ============================================================
-# get map data
+# GET MAP DATA
 # ============================================================
 @app.route("/get_map")
 def get_map():
     return jsonify({"points": mapping_points})
 
+
+# ============================================================
+# RUN SERVER (local test)
 # ============================================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, threaded=True)
