@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, request, jsonify
 import requests
 import math
 
@@ -31,7 +31,7 @@ SCAN360 = f"{NODEJS_BASE}/trigger_scan"
 @app.route("/")
 def index():
 
-    html = f"""
+    html = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -123,20 +123,22 @@ def index():
 
 <script>
 /* ==========================================================
-   CAMERA ROTATE FIXED — NOW WORKS 100%
+   CAMERA ROTATE — FIXED FORMAT
 ========================================================== */
 document.getElementById("camLeft20").onclick = async () => {{
-    const res = await fetch("{NODE_CAMERA}?direction=left&angle=20");
+    const url = "{NODE_CAMERA}?direction=left&angle=20";
+    const res = await fetch(url);
     const js = await res.json();
     document.getElementById("camAngleStatus").innerText =
-        "Sent: LEFT 20° → " + js.status;
+        "Sent LEFT 20° → " + js.status;
 }};
 
 document.getElementById("camRight20").onclick = async () => {{
-    const res = await fetch("{NODE_CAMERA}?direction=right&angle=20");
+    const url = "{NODE_CAMERA}?direction=right&angle=20";
+    const res = await fetch(url);
     const js = await res.json();
     document.getElementById("camAngleStatus").innerText =
-        "Sent: RIGHT 20° → " + js.status;
+        "Sent RIGHT 20° → " + js.status;
 }};
 
 
@@ -199,41 +201,41 @@ let manualStream=null, mediaRecorder=null, audioChunks=[];
 let listenStream=null, audioCtx=null, source=null, analyser=null;
 let rafId=null, activeRecorder=null;
 
-function clearCache(){{
+function clearCache(){
     if (rafId) cancelAnimationFrame(rafId);
     if (activeRecorder && activeRecorder.state!=="inactive") activeRecorder.stop();
     if (listenStream) listenStream.getTracks().forEach(t=>t.stop());
     if (audioCtx) audioCtx.close();
     source=null; analyser=null; audioChunks=[];
-}}
+}
 
-async function startRecordingManual(){{
-    manualStream=await navigator.mediaDevices.getUserMedia({{audio:true}});
+async function startRecordingManual(){
+    manualStream=await navigator.mediaDevices.getUserMedia({audio:true});
     audioChunks=[];
     mediaRecorder=new MediaRecorder(manualStream);
 
-    mediaRecorder.ondataavailable=e=>{{
+    mediaRecorder.ondataavailable=e=>{
         if(e.data.size>0) audioChunks.push(e.data);
-    }};
+    };
 
-    mediaRecorder.onstop=()=>{{
+    mediaRecorder.onstop=()=>{
         manualStream.getTracks().forEach(t=>t.stop());
         uploadAudio();
-    }};
+    };
 
     mediaRecorder.start();
 
     document.getElementById("status").innerText="Recording...";
     document.getElementById("startBtn").disabled=true;
     document.getElementById("stopBtn").disabled=false;
-}}
+}
 
-function stopRecordingManual(){{
+function stopRecordingManual(){
     if(mediaRecorder && mediaRecorder.state!=="inactive") mediaRecorder.stop();
     document.getElementById("status").innerText="Processing...";
     document.getElementById("startBtn").disabled=false;
     document.getElementById("stopBtn").disabled=true;
-}}
+}
 
 document.getElementById("startBtn").onclick=startRecordingManual;
 document.getElementById("stopBtn").onclick=stopRecordingManual;
@@ -241,15 +243,15 @@ document.getElementById("stopBtn").onclick=stopRecordingManual;
 
 const thresholdAmp = 50;
 
-async function startAutoListening(){{
+async function startAutoListening(){
     clearCache();
 
-    try {{
-        listenStream=await navigator.mediaDevices.getUserMedia({{audio:true}});
-    }} catch(e) {{
+    try {
+        listenStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    } catch(e) {
         document.getElementById("status").innerText="Cannot access microphone";
         return;
-    }}
+    }
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     audioCtx=new AudioCtx();
@@ -261,24 +263,24 @@ async function startAutoListening(){{
     const data=new Uint8Array(analyser.fftSize);
     let triggered=false, recordStart=0, lastLevel=0;
 
-    function startAutoRecord(){{
+    function startAutoRecord(){
         if(triggered) return;
         triggered=true;
         audioChunks=[];
 
         activeRecorder=new MediaRecorder(listenStream);
 
-        activeRecorder.ondataavailable=e=>{{
+        activeRecorder.ondataavailable=e=>{
             if(e.data.size>0) audioChunks.push(e.data);
-        }};
+        };
 
         activeRecorder.onstop=()=> uploadAudio(lastLevel);
 
         activeRecorder.start();
         recordStart=Date.now();
-    }}
+    }
 
-    function loop(){{
+    function loop(){
         analyser.getByteTimeDomainData(data);
         let maxAmp=0;
 
@@ -287,30 +289,30 @@ async function startAutoListening(){{
 
         document.getElementById("status").innerText="Listening... Level="+maxAmp;
 
-        if(!triggered && maxAmp>=thresholdAmp){{
+        if(!triggered && maxAmp>=thresholdAmp){
             lastLevel=maxAmp;
             startAutoRecord();
-        }}
+        }
 
-        if(triggered && (Date.now()-recordStart>=2500)){{
+        if(triggered && (Date.now()-recordStart>=2500)){
             if(activeRecorder && activeRecorder.state!=="inactive") activeRecorder.stop();
             return;
-        }}
+        }
 
         rafId=requestAnimationFrame(loop);
-    }}
+    }
 
     loop();
-}}
+}
 
 window.onload=startAutoListening;
 
 
-async function uploadAudio(level=0){{
-    if(!audioChunks.length){{
+async function uploadAudio(level=0){
+    if(!audioChunks.length){
         document.getElementById("status").innerText="No audio data.";
         return;
-    }}
+    }
 
     const blob=new Blob(audioChunks);
     const form=new FormData();
@@ -318,8 +320,8 @@ async function uploadAudio(level=0){{
 
     document.getElementById("status").innerText="Uploading...";
 
-    try {{
-        const res=await fetch("{NODE_UPLOAD}", {{ method:"POST", body:form }});
+    try {
+        const res=await fetch("{NODE_UPLOAD}", { method:"POST", body:form });
         const json=await res.json();
         const audioUrl=json.audio_url;
 
@@ -332,20 +334,20 @@ async function uploadAudio(level=0){{
         clearCache();
         document.getElementById("status").innerText="Robot speaking...";
 
-        if(audioUrl){{
+        if(audioUrl){
             const audio=new Audio(audioUrl);
-            audio.onloadedmetadata=() => {{
+            audio.onloadedmetadata=() => {
                 audio.play();
                 setTimeout(startAutoListening, audio.duration*1000+2000);
-            }};
-        }} else {{
+            };
+        } else {
             setTimeout(startAutoListening, 800);
-        }}
+        }
 
-    }} catch(e){{
+    } catch(e){
         document.getElementById("status").innerText="Upload error: "+e;
-    }}
-}}
+    }
+}
 </script>
 
 </body>
