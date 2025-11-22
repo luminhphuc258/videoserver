@@ -39,31 +39,44 @@ TEMPLATE = """
 <p id="cameraStatus" style="margin-top:15px; color:#0f0;"></p>
 
 <script>
-const NODE_CAMERA = "{{ node_camera }}";
+/* ==========================================================
+   CAMERA ROTATE → GỌI THẲNG NODEJS /camera_rotate
+========================================================== */
 
-document.getElementById("btnLeft20").onclick = async () => {
-    try {
-        const r = await fetch(NODE_CAMERA + "?direction=left&angle=20");
-        const js = await r.json();
-        document.getElementById("cameraStatus").innerText =
-            "Sent LEFT → " + js.status;
-    } catch(err) {
-        document.getElementById("cameraStatus").innerText =
-            "Error: " + err;
-    }
-};
+const NODE_CAMERA = "__NODE_CAMERA__";
 
-document.getElementById("btnRight20").onclick = async () => {
+// góc hiện tại của camera (giống với góc em set lúc bật nguồn ở ESP, ví dụ 90°)
+let currentCamAngle = 90;     
+const STEP = 20;              // mỗi lần quay 20°
+
+async function sendCameraRotate(direction) {
+    // tính góc mới
+    if (direction === "left")  currentCamAngle += STEP;
+    if (direction === "right") currentCamAngle -= STEP;
+
+    // giới hạn 0–180
+    if (currentCamAngle < 0)   currentCamAngle = 0;
+    if (currentCamAngle > 180) currentCamAngle = 180;
+
+    const url = NODE_CAMERA + 
+        "?direction=" + encodeURIComponent(direction) + 
+        "&angle=" + encodeURIComponent(currentCamAngle);
+
     try {
-        const r = await fetch(NODE_CAMERA + "?direction=right&angle=20");
-        const js = await r.json();
-        document.getElementById("cameraStatus").innerText =
-            "Sent RIGHT → " + js.status;
-    } catch(err) {
-        document.getElementById("cameraStatus").innerText =
-            "Error: " + err;
+        const res = await fetch(url);
+        const js  = await res.json();
+
+        document.getElementById("camAngleStatus").innerText =
+          `Sent: ${direction.toUpperCase()} → ${currentCamAngle}° (status=${js.status})`;
+    } catch (e) {
+        document.getElementById("camAngleStatus").innerText =
+          "Error sending command: " + e;
     }
-};
+}
+
+// gán sự kiện cho 2 nút
+document.getElementById("camLeft20").onclick  = () => sendCameraRotate("left");
+document.getElementById("camRight20").onclick = () => sendCameraRotate("right");
 </script>
 
 </body>
