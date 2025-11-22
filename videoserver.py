@@ -147,32 +147,35 @@ TEMPLATE_HTML = """
 /* ==========================================================
    CAMERA ROTATE → GỌI THẲNG NODEJS /camera_rotate
 ========================================================== */
+/* ==========================================================
+   CAMERA — FIXED VERSION, TỰ TĂNG / GIẢM GÓC
+========================================================== */
 
-const NODE_CAMERA = "__NODE_CAMERA__";
+let camAngle = 90;   // bắt đầu từ 90°, giống ESP32
+
+function sendCameraRotate() {
+    const url = NODE_CAMERA + "?angle=" + camAngle;
+    return fetch(url).then(r => r.json());
+}
 
 document.getElementById("camLeft20").onclick = async () => {
-    try {
-        const res = await fetch(NODE_CAMERA + "?direction=left&angle=20");
-        const js  = await res.json();
-        document.getElementById("camAngleStatus").innerText =
-            "Sent: LEFT 20° → " + js.status;
-    } catch(e) {
-        document.getElementById("camAngleStatus").innerText =
-            "Error sending LEFT 20°: " + e;
-    }
+    camAngle += 20;
+    if (camAngle > 180) camAngle = 180;
+
+    const js = await sendCameraRotate();
+    document.getElementById("camAngleStatus").innerText =
+        "Camera = " + camAngle + "° → " + js.status;
 };
 
 document.getElementById("camRight20").onclick = async () => {
-    try {
-        const res = await fetch(NODE_CAMERA + "?direction=right&angle=20");
-        const js  = await res.json();
-        document.getElementById("camAngleStatus").innerText =
-            "Sent: RIGHT 20° → " + js.status;
-    } catch(e) {
-        document.getElementById("camAngleStatus").innerText =
-            "Error sending RIGHT 20°: " + e;
-    }
+    camAngle -= 20;
+    if (camAngle < 0) camAngle = 0;
+
+    const js = await sendCameraRotate();
+    document.getElementById("camAngleStatus").innerText =
+        "Camera = " + camAngle + "° → " + js.status;
 };
+
 
 
 /* ==========================================================
